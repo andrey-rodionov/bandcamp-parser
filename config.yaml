@@ -1,0 +1,75 @@
+# Configuration file for Bandcamp Parser Bot
+
+# Schedule configuration (24-hour format)
+# Every hour from 07:00 to 01:00
+schedule:
+  times:
+    - "07:00"
+    - "08:00"
+    - "09:00"
+    - "10:00"
+    - "11:00"
+    - "12:00"
+    - "13:00"
+    - "14:00"
+    - "15:00"
+    - "16:00"
+    - "17:00"
+    - "18:00"
+    - "19:00"
+    - "20:00"
+    - "21:00"
+    - "22:00"
+    - "23:00"
+    - "00:00"
+    - "01:00"
+  timezone: "Europe/Moscow"  # Change to your timezone
+
+# Tags to monitor
+tags:
+  - "punk"
+  - "hardcore"
+  - "hardcore punk"
+  - "raw punk"
+  - "d-beat"
+  - "dbeat"
+  - "crust punk"
+  - "post punk"
+  - "hcpunk"
+  - "punk rock"
+  - "metalcore"
+  - "egg punk"
+  - "street punk"
+  - "post-punk"
+  - "uk82"
+  - "h8000"
+  - "garage punk"
+  - "hc"
+  
+
+# Blacklist tags - releases from these tags will be added to DB but NOT sent to Telegram
+# This prevents releases from blacklisted genres from being sent when found in other tags
+# Uncomment and add tags as needed
+blacklist_tags:
+  - "happy hardcore"
+  - "electronic"
+  - "techno"
+  
+# Parser settings
+parser:
+  # Delay between requests (seconds)
+  request_delay: 1.5
+  # User agent for requests
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+# Telegram settings
+telegram:
+  # Maximum length of description in message (0 = no limit)
+  max_description_length: 0
+
+# Database settings
+database:
+  # Path to SQLite database file
+  db_path: "bandcamp_releases.db"
+  # Cleanup old records older than N days (0 = never cleanup)
+  cleanup_days: 90
