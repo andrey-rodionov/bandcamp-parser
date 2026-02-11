@@ -80,15 +80,8 @@ class BandcampBot:
         if self.db.exists(release.url):
             return False
         
-        if send_to_telegram:
-            # Send to Telegram
-            success = await self.telegram.send_release(release)
-            if not success:
-                logger.warning(f"Failed to send: {release.title}")
-                return False
-        
-        # Add to database
-        self.db.add(
+        # Add to database first (even if sending fails)
+        added = self.db.add(
             release_url=release.url,
             title=release.title,
             artist=release.artist,
@@ -96,9 +89,23 @@ class BandcampBot:
             cover_url=release.cover_url,
             description=release.description
         )
-        self.db.mark_sent(release.url)
         
-        return True
+        if not added:
+            return False
+        
+        if send_to_telegram:
+            # Send to Telegram
+            success = await self.telegram.send_release(release)
+            if success:
+                self.db.mark_sent(release.url)
+                return True
+            else:
+                logger.warning(f"Failed to send: {release.title} (saved to DB for retry)")
+                return False
+        else:
+            # For blacklist, mark as sent immediately
+            self.db.mark_sent(release.url)
+            return True
     
     async def _process_blacklist(self) -> int:
         """Process blacklist tags. Returns count of blacklisted."""
@@ -140,17 +147,22 @@ class BandcampBot:
                 if self.db.exists(release.url):
                     continue
                 
+                # Add to database first (even if sending fails)
+                added = self.db.add(
+                    release_url=release.url,
+                    title=release.title,
+                    artist=release.artist,
+                    tags=release.tags,
+                    cover_url=release.cover_url
+                )
+                
+                if not added:
+                    continue
+                
                 # Send to Telegram
                 success = await self.telegram.send_release(release)
                 
                 if success:
-                    self.db.add(
-                        release_url=release.url,
-                        title=release.title,
-                        artist=release.artist,
-                        tags=release.tags,
-                        cover_url=release.cover_url
-                    )
                     self.db.mark_sent(release.url)
                     result.sent += 1
                     tag_sent += 1
@@ -158,6 +170,7 @@ class BandcampBot:
                     await asyncio.sleep(2)  # Rate limiting
                 else:
                     result.failed += 1
+                    logger.warning(f"Failed to send: {release.title} (saved to DB, sent_at=NULL)")
             
             if tag_sent == 0:
                 logger.info(f"No new releases for '{tag}'")
