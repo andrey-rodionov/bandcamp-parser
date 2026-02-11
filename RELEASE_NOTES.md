@@ -1,5 +1,59 @@
 # Release Notes
 
+## Version 1.2.0 - Automatic Retry for Failed Releases
+
+### Summary
+Added automatic retry mechanism that attempts to resend failed releases every 20 minutes until successful delivery.
+
+### Changes
+
+#### New Features
+- **Automatic retry system**: Failed releases (with `sent_at=NULL`) are now automatically retried every 20 minutes
+- **Background retry task**: Runs continuously in a separate thread, checking for unsent releases and attempting to send them
+- **Immediate retry on startup**: Retry task runs immediately when bot starts, then continues every 20 minutes
+- **Persistent retry**: Retries continue indefinitely until release is successfully sent
+
+#### Technical Details
+
+**New Methods:**
+- `Database.get_unsent_releases()`: Returns all releases with `sent_at=NULL` from the database
+- `BandcampBot._retry_failed_releases()`: Processes unsent releases and attempts to send them to Telegram
+- `BandcampBot._retry_loop()`: Background loop that runs retry task every 20 minutes
+- `BandcampBot._start_retry_task()` / `_stop_retry_task()`: Control methods for retry task lifecycle
+
+**Implementation:**
+- Retry task runs in a separate daemon thread
+- Uses asyncio.run() to execute async retry operations
+- Gracefully stops on application shutdown
+- Logs all retry attempts and results
+
+**Behavior:**
+- Retry task starts automatically when bot starts
+- First retry attempt happens immediately on startup
+- Subsequent retries occur every 20 minutes
+- Only releases with `sent_at=NULL` are retried
+- Successfully sent releases are marked with `mark_sent()` and removed from retry queue
+- Failed retries continue to be retried every 20 minutes
+
+#### Database Impact
+- No schema changes required
+- Uses existing `sent_at` field to identify unsent releases
+- Failed releases remain in database until successfully sent
+
+### Migration Notes
+- No migration required
+- Retry mechanism starts automatically on bot startup
+- Existing failed releases will be retried automatically
+
+### Testing Recommendations
+1. Test with network interruptions to verify retries work correctly
+2. Verify retry task starts on bot startup
+3. Confirm retries occur every 20 minutes
+4. Check that successfully sent releases are removed from retry queue
+5. Verify retry task stops gracefully on shutdown
+
+---
+
 ## Version 1.1.0 - Failed Release Persistence Fix
 
 ### Summary

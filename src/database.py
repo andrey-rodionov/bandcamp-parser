@@ -218,3 +218,29 @@ class Database:
             )
             for row in rows
         ]
+    
+    def get_unsent_releases(self) -> List[ReleaseRecord]:
+        """Get all releases that haven't been sent yet (sent_at IS NULL)."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT * FROM releases 
+                   WHERE sent_at IS NULL
+                   ORDER BY created_at ASC"""
+            )
+            rows = cursor.fetchall()
+        
+        return [
+            ReleaseRecord(
+                id=row["id"],
+                release_url=row["release_url"],
+                title=row["title"],
+                artist=row["artist"],
+                tags=row["tags"],
+                cover_url=row["cover_url"],
+                description=row["description"],
+                created_at=row["created_at"],
+                sent_at=row["sent_at"]
+            )
+            for row in rows
+        ]

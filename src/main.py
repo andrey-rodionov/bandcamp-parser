@@ -4,6 +4,7 @@ import logging
 import signal
 import sys
 import time
+import threading
 import warnings
 from pathlib import Path
 from dataclasses import dataclass
@@ -69,6 +70,10 @@ class BandcampBot:
             timezone=config.schedule.timezone
         )
         self.scheduler.set_task(self.run_parsing)
+        
+        # Retry task control
+        self._retry_running = False
+        self._retry_thread: Optional[threading.Thread] = None
     
     async def _process_release(
         self, 
@@ -179,6 +184,51 @@ class BandcampBot:
         
         return result
     
+    async def _retry_failed_releases(self) -> None:
+        """Retry sending releases that failed to send (sent_at IS NULL)."""
+        unsent_releases = self.db.get_unsent_releases()
+        
+        if not unsent_releases:
+            logger.debug("No unsent releases to retry")
+            return
+        
+        logger.info(f"Retrying {len(unsent_releases)} unsent release(s)...")
+        
+        retried_count = 0
+        success_count = 0
+        
+        for record in unsent_releases:
+            # Convert ReleaseRecord to Release object
+            tags_list = []
+            if record.tags:
+                tags_list = [tag.strip() for tag in record.tags.split(",") if tag.strip()]
+            
+            release = Release(
+                url=record.release_url,
+                title=record.title,
+                artist=record.artist,
+                tags=tags_list,
+                cover_url=record.cover_url,
+                description=record.description
+            )
+            
+            # Try to send
+            success = await self.telegram.send_release(release)
+            retried_count += 1
+            
+            if success:
+                self.db.mark_sent(release.url)
+                success_count += 1
+                logger.info(f"Successfully sent (retry): {release.title} by {release.artist}")
+                await asyncio.sleep(2)  # Rate limiting
+            else:
+                logger.warning(f"Retry failed: {release.title} (will retry again in 20 minutes)")
+        
+        if success_count > 0:
+            logger.info(f"Retry completed: {success_count}/{retried_count} releases sent successfully")
+        else:
+            logger.info(f"Retry completed: {retried_count} releases still pending")
+    
     async def run_parsing(self) -> None:
         """Main parsing task."""
         logger.info("Starting parsing task...")
@@ -236,8 +286,66 @@ class BandcampBot:
         )
         await self.telegram.send_message(message)
     
+    def _retry_loop(self) -> None:
+        """Background loop for retrying failed releases every 20 minutes."""
+        RETRY_INTERVAL = 20 * 60  # 20 minutes in seconds
+        
+        logger.info("Retry task started (runs every 20 minutes)")
+        
+        # Run immediately on startup, then every 20 minutes
+        first_run = True
+        
+        while self._retry_running:
+            try:
+                # Run retry task
+                asyncio.run(self._retry_failed_releases())
+            except Exception as e:
+                logger.error(f"Error in retry task: {e}", exc_info=True)
+            
+            # Wait 20 minutes before next retry (skip wait on first run)
+            if self._retry_running:
+                if first_run:
+                    first_run = False
+                    # Small delay after first run to avoid immediate retry
+                    time.sleep(5)
+                else:
+                    # Wait 20 minutes before next retry
+                    for _ in range(RETRY_INTERVAL):
+                        if not self._retry_running:
+                            break
+                        time.sleep(1)
+        
+        logger.info("Retry task stopped")
+    
+    def _start_retry_task(self) -> None:
+        """Start the background retry task."""
+        if self._retry_running:
+            return
+        
+        self._retry_running = True
+        self._retry_thread = threading.Thread(
+            target=self._retry_loop,
+            daemon=True,
+            name="RetryTask"
+        )
+        self._retry_thread.start()
+        logger.info("Started retry task for failed releases (every 20 minutes)")
+    
+    def _stop_retry_task(self) -> None:
+        """Stop the background retry task."""
+        if not self._retry_running:
+            return
+        
+        self._retry_running = False
+        if self._retry_thread:
+            self._retry_thread.join(timeout=5)
+        logger.info("Stopped retry task")
+    
     def _cleanup(self) -> None:
         """Cleanup resources."""
+        # Stop retry task
+        self._stop_retry_task()
+        
         # Suppress urllib3 warnings during shutdown
         logging.getLogger('urllib3').setLevel(logging.ERROR)
         
@@ -266,6 +374,9 @@ class BandcampBot:
         
         # Start scheduler
         self.scheduler.start()
+        
+        # Start retry task for failed releases
+        self._start_retry_task()
         
         # Send startup message
         try:
