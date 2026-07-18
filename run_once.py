@@ -39,27 +39,27 @@ async def run_once():
         chat_id=config.telegram.chat_id,
         max_description_length=config.telegram.max_description_length
     )
-    
+
     logger.info("Starting one-time parsing...")
     logger.info(f"Tags: {', '.join(config.tags)}")
     if config.blacklist_tags:
         logger.info(f"Blacklist: {', '.join(config.blacklist_tags)}")
-    
+
     try:
         # Process blacklist tags first
         blacklisted = 0
         if config.blacklist_tags:
             logger.info("=" * 50)
             logger.info("Processing blacklist tags...")
-            
+
             for tag in config.blacklist_tags:
                 logger.info(f"Blacklist tag: {tag}")
                 releases = parser.get_releases_by_tag(tag)
-                
+
                 for release in releases:
                     if db.exists(release.url):
                         continue
-                    
+
                     if db.add(
                         release_url=release.url,
                         title=release.title,
@@ -69,62 +69,65 @@ async def run_once():
                     ):
                         db.mark_sent(release.url)
                         blacklisted += 1
-            
+
             logger.info(f"Blacklisted {blacklisted} releases")
-        
+
         # Process main tags
         logger.info("=" * 50)
         logger.info("Processing main tags...")
-        
+
         sent = 0
-        
+        failed = 0
+
         for tag in config.tags:
             logger.info(f"Processing tag: {tag}")
             releases = parser.get_releases_by_tag(tag)
-            
+
             for release in releases:
                 if db.exists(release.url):
                     continue
-                
+
+                # Add to DB first (even if sending fails) so a failed send
+                # isn't silently dropped - the long-running service's retry
+                # loop will pick it up (sent_at stays NULL until it succeeds).
+                if not db.add(
+                    release_url=release.url,
+                    title=release.title,
+                    artist=release.artist,
+                    tags=release.tags,
+                    cover_url=release.cover_url
+                ):
+                    continue
+
                 success = await telegram.send_release(release)
-                
+
                 if success:
-                    db.add(
-                        release_url=release.url,
-                        title=release.title,
-                        artist=release.artist,
-                        tags=release.tags,
-                        cover_url=release.cover_url
-                    )
                     db.mark_sent(release.url)
                     sent += 1
                     logger.info(f"Sent: {release.title} by {release.artist}")
                     await asyncio.sleep(2)
-        
+                else:
+                    failed += 1
+                    logger.warning(f"Failed to send: {release.title} (saved to DB for retry)")
+
         # Summary
-        logger.info(f"Sent {sent} new releases")
-        
+        logger.info(f"Sent {sent} new releases ({failed} failed, will retry)")
+
         if sent > 0:
             await telegram.send_message(f"✅ Found and sent {sent} new release(s)")
         else:
             logger.info("No new releases found")
             await telegram.send_message("ℹ️ No new releases found")
-        
+
         logger.info("Parsing completed!")
-        
+
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         await telegram.send_message(f"❌ Error: {e}")
-    
+
     finally:
-        # Cleanup - suppress urllib3 warnings during shutdown
         logging.getLogger('urllib3').setLevel(logging.ERROR)
-        if parser.driver:
-            try:
-                parser.driver.quit()
-                parser.driver = None
-            except Exception:
-                pass
+        parser.session.close()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,97 @@
 # Release Notes
 
+## Version 2.0.0 - API-Based Scraping, Admin Commands, and Reliability Fixes
+
+### Summary
+Replaced the Selenium/browser-based scraper with direct calls to Bandcamp's
+internal discovery API, removing the heaviest and most fragile part of the
+stack. Added a Telegram command interface for changing tags, schedule, and
+genre mappings without server access, plus several reliability and cleanup
+fixes.
+
+### Changes
+
+#### Breaking / Architecture
+- Removed Selenium, undetected-chromedriver, webdriver-manager, and
+  BeautifulSoup entirely - the scraper now fetches releases via a lightweight
+  HTTP call to Bandcamp's internal discover API instead of driving a headless
+  browser
+- Added a genre-fallback mapping so tags that aren't one of Bandcamp's
+  curated top-level genres (e.g. "hardcore punk", "d-beat", "metalcore") are
+  served from the closest matching genre feed
+- Pagination now always includes the freshest page of a genre feed plus one
+  supplementary page per call, so multiple tags mapped to the same genre
+  still get broad, non-redundant coverage without ever missing newly
+  published releases
+
+#### New Features
+- **Telegram admin commands**: manage tags, blacklist, schedule
+  (times/jitter), and genre mappings directly from Telegram, restricted to
+  the configured chat - see `/help` for the full command list
+- **Schedule jitter**: a configurable random delay after each scheduled time,
+  so runs don't fire at a perfectly predictable moment
+- **Disk-usage-based cleanup**: the database now also prunes its oldest
+  records once disk usage crosses a configurable threshold, independent of
+  the existing age-based retention window
+- **Log rotation**: application logs now rotate daily and are kept for 4
+  weeks instead of growing unbounded
+
+#### Bug Fixes
+- `run_once.py` no longer silently drops a release if the Telegram send
+  fails - it's now persisted to the database first, same as the
+  long-running service, so it gets picked up by the retry mechanism
+- Removed a duplicate tag entry in the default configuration that mapped to
+  the same genre twice
+
+#### Removed
+- Legacy/compatibility aliases in the config and database modules that had
+  no remaining callers
+- Unused dependencies: aiohttp, beautifulsoup4, Pillow, selenium,
+  webdriver-manager, undetected-chromedriver
+
+#### Technical Details
+
+**New/changed modules:**
+- `src/admin_bot.py`: Telegram command handlers, running on a dedicated
+  polling thread separate from the notification bot
+- `src/parser.py`: rewritten around the discover API; `BandcampParser` no
+  longer manages a browser driver
+- `src/config.py`: adds a bot-writable `config.overrides.yaml` layer
+  (gitignored) so admin commands can change settings without editing the
+  main config file, plus a `genre_fallback` property
+- `src/database.py`: adds `cleanup_by_disk_pressure()` and a public
+  `disk_usage_percent()`
+
+**Behavior:**
+- Tag and blacklist changes made via Telegram commands take effect on the
+  next scheduled run, no restart needed
+- Schedule and genre-mapping changes require a restart to take effect; the
+  admin bot triggers this itself and the service comes back up automatically
+
+#### Database Impact
+- No schema changes
+- Disk-pressure cleanup deletes the oldest records (regardless of age) once
+  the configured disk-usage threshold is reached, then reclaims the freed
+  space with `VACUUM`
+
+### Migration Notes
+- Copy `.env.example` to `.env` and fill in your own Telegram bot token and
+  chat ID
+- Remove `selenium`, `undetected-chromedriver`, `webdriver-manager`,
+  `beautifulsoup4`, `aiohttp`, and `Pillow` from any existing virtual
+  environment if you're upgrading in place - they're no longer required
+- No database migration required
+
+### Testing Recommendations
+1. Confirm the bot can still fetch and send releases for your configured
+   tags after upgrading
+2. Test `/status`, `/tags_add`, and `/schedule_set` via Telegram to confirm
+   the admin commands work and are restricted to your own chat
+3. Verify the service still starts and stops cleanly under your process
+   manager
+
+---
+
 ## Version 1.2.0 - Automatic Retry for Failed Releases
 
 ### Summary

@@ -1,9 +1,10 @@
 """Database module for storing and tracking releases."""
+import shutil
 import sqlite3
 import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -94,10 +95,6 @@ class Database:
             )
             return cursor.fetchone() is not None
     
-    # Alias for backwards compatibility
-    def release_exists(self, release_url: str) -> bool:
-        return self.exists(release_url)
-    
     def add(
         self,
         release_url: str,
@@ -125,18 +122,6 @@ class Database:
         logger.debug(f"Added release: {title} by {artist}")
         return True
     
-    # Alias for backwards compatibility
-    def add_release(
-        self,
-        release_url: str,
-        title: str,
-        artist: str,
-        tags: Optional[List[str]] = None,
-        cover_url: Optional[str] = None,
-        description: Optional[str] = None
-    ) -> bool:
-        return self.add(release_url, title, artist, tags, cover_url, description)
-    
     def mark_sent(self, release_url: str) -> None:
         """Mark release as sent."""
         with self._connection() as conn:
@@ -146,10 +131,6 @@ class Database:
                 (datetime.now(), release_url)
             )
             conn.commit()
-    
-    # Alias for backwards compatibility
-    def mark_as_sent(self, release_url: str) -> None:
-        self.mark_sent(release_url)
     
     def cleanup(self, days: int = 90) -> int:
         """Remove records older than specified days. Returns count of deleted."""
@@ -170,10 +151,69 @@ class Database:
             logger.info(f"Cleaned up {deleted} old records")
         return deleted
     
-    # Alias for backwards compatibility
-    def cleanup_old_records(self, days: int = 90) -> None:
-        self.cleanup(days)
-    
+    def disk_usage_percent(self) -> float:
+        """Percent of disk space used on the filesystem holding the database."""
+        usage = shutil.disk_usage(self.db_path.parent)
+        return (usage.used / usage.total) * 100 if usage.total else 0.0
+
+    def cleanup_by_disk_pressure(
+        self,
+        threshold_percent: float = 85.0,
+        target_percent: float = 75.0,
+        batch_fraction: float = 0.1,
+        max_iterations: int = 8
+    ) -> int:
+        """Emergency cleanup for when disk space is running low, independent
+        of the age-based cleanup() retention window. If the disk holding the
+        database is at or above threshold_percent full, repeatedly deletes
+        the oldest slice of records and VACUUMs (SQLite doesn't reclaim
+        space from DELETE alone) until usage drops back to target_percent,
+        there's nothing left to delete, or max_iterations is hit. Returns
+        the total number of records deleted."""
+        if threshold_percent <= 0:
+            return 0
+
+        if self.disk_usage_percent() < threshold_percent:
+            return 0
+
+        logger.warning(
+            f"Disk usage at {self.disk_usage_percent():.1f}% "
+            f"(>= {threshold_percent}% threshold) - freeing space by "
+            f"deleting the oldest database records"
+        )
+
+        total_deleted = 0
+        for _ in range(max_iterations):
+            with self._connection() as conn:
+                cursor = conn.cursor()
+                total_rows = cursor.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
+                if total_rows == 0:
+                    break
+                batch_size = max(1, int(total_rows * batch_fraction))
+                cursor.execute(
+                    """DELETE FROM releases WHERE id IN (
+                           SELECT id FROM releases ORDER BY created_at ASC LIMIT ?
+                       )""",
+                    (batch_size,)
+                )
+                deleted = cursor.rowcount
+                conn.commit()
+
+            total_deleted += deleted
+
+            with self._connection() as conn:
+                conn.execute("VACUUM")
+
+            current_usage = self.disk_usage_percent()
+            logger.warning(
+                f"Disk pressure cleanup: deleted {deleted} oldest records "
+                f"(disk usage now {current_usage:.1f}%)"
+            )
+            if deleted == 0 or current_usage < target_percent:
+                break
+
+        return total_deleted
+
     def get_stats(self) -> DatabaseStats:
         """Get database statistics."""
         with self._connection() as conn:
@@ -186,11 +226,6 @@ class Database:
             sent = cursor.fetchone()["sent"]
         
         return DatabaseStats(total=total, sent=sent)
-    
-    # Alias for backwards compatibility  
-    def get_statistics(self) -> Dict[str, int]:
-        stats = self.get_stats()
-        return {"total": stats.total, "sent": stats.sent, "pending": stats.pending}
     
     def get_recent(self, limit: int = 100) -> List[ReleaseRecord]:
         """Get recent releases."""

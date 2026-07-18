@@ -1,29 +1,13 @@
 """Bandcamp parser module."""
 import logging
-import platform
-import re
-import time
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional, Generator
-from urllib.parse import urljoin
+from typing import Dict, Generator, List, Optional
 
 import requests
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
-
-# Selenium imports (optional)
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.action_chains import ActionChains
-    SELENIUM_AVAILABLE = True
-except ImportError:
-    SELENIUM_AVAILABLE = False
 
 
 @dataclass
@@ -37,10 +21,11 @@ class Release:
     description: Optional[str] = None
     release_date: Optional[datetime] = None
     location: Optional[str] = None
-    
+    is_preorder: Optional[bool] = None
+
     def __repr__(self) -> str:
         return f"<Release: {self.title} by {self.artist}>"
-    
+
     def is_older_than_days(self, days: int) -> bool:
         """Check if release is older than specified days."""
         if not self.release_date or days <= 0:
@@ -48,166 +33,83 @@ class Release:
         return (datetime.now() - self.release_date).days > days
 
 
-# Backwards compatibility alias
-BandcampRelease = Release
-
-
-class SeleniumHelper:
-    """Helper class for Selenium operations."""
-    
-    # Timeouts
-    PAGE_LOAD_TIMEOUT = 10
-    IMPLICIT_WAIT = 5
-    ELEMENT_WAIT = 3
-    ACTION_DELAY = 5
-    
-    # XPath selectors
-    COOKIE_SELECTORS = [
-        "//button[contains(text(), 'Accept')]",
-        "//button[contains(@class, 'accept')]",
-        "//div[contains(@class, 'cookie')]//button",
-    ]
-    
-    VIEW_MORE_SELECTORS = [
-        "//button[@id='view-more']",
-        "//button[@data-test='view-more']",
-        "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'view more')]",
-        "//button[contains(@class, 'more')]",
-    ]
-    
-    def __init__(self, driver):
-        self.driver = driver
-    
-    def click_element(self, element) -> bool:
-        """Try multiple methods to click an element."""
-        # Method 1: JavaScript click
-        try:
-            self.driver.execute_script("arguments[0].click();", element)
-            return True
-        except Exception:
-            pass
-        
-        # Method 2: Regular click
-        try:
-            element.click()
-            return True
-        except Exception:
-            pass
-        
-        # Method 3: ActionChains
-        try:
-            ActionChains(self.driver).move_to_element(element).click().perform()
-            return True
-        except Exception:
-            pass
-        
-        return False
-    
-    def scroll_into_view(self, element) -> None:
-        """Scroll element into view."""
-        try:
-            self.driver.execute_script(
-                "arguments[0].scrollIntoView({block: 'center'});", 
-                element
-            )
-            time.sleep(0.5)
-        except Exception:
-            pass
-    
-    def scroll_to_bottom(self) -> None:
-        """Scroll to bottom of page."""
-        try:
-            last_height = self.driver.execute_script("return document.body.scrollHeight")
-            for _ in range(5):
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
-                new_height = self.driver.execute_script("return document.body.scrollHeight")
-                if new_height == last_height:
-                    break
-                last_height = new_height
-        except Exception as e:
-            logger.debug(f"Scroll error: {e}")
-    
-    def find_and_click(self, selectors: List[str], description: str) -> bool:
-        """Find element by selectors and click it."""
-        for selector in selectors:
-            try:
-                wait = WebDriverWait(self.driver, self.ELEMENT_WAIT)
-                element = wait.until(EC.element_to_be_clickable((By.XPATH, selector)))
-                self.scroll_into_view(element)
-                if self.click_element(element):
-                    logger.info(f"Clicked {description}")
-                    return True
-            except Exception:
-                continue
-        return False
-    
-    def accept_cookies(self) -> bool:
-        """Accept cookie consent if present."""
-        result = self.find_and_click(self.COOKIE_SELECTORS, "cookie consent")
-        if result:
-            time.sleep(self.ACTION_DELAY)
-        return result
-    
-    def click_view_more(self, max_clicks: int = 5) -> int:
-        """Click 'View more results' button repeatedly."""
-        clicks = 0
-        
-        for i in range(max_clicks):
-            if i > 0:
-                time.sleep(self.ACTION_DELAY)
-            
-            self.scroll_to_bottom()
-            time.sleep(3)
-            
-            clicked = False
-            for selector in self.VIEW_MORE_SELECTORS:
-                try:
-                    elements = self.driver.find_elements(By.XPATH, selector)
-                    for elem in elements:
-                        if elem.is_displayed() and elem.is_enabled():
-                            text = elem.text.lower()
-                            if 'more' in text:
-                                self.scroll_into_view(elem)
-                                if self.click_element(elem):
-                                    clicks += 1
-                                    clicked = True
-                                    logger.info(f"Clicked 'View more' ({clicks}/{max_clicks})")
-                                    break
-                except Exception:
-                    continue
-                if clicked:
-                    break
-            
-            if not clicked:
-                if clicks == 0:
-                    logger.warning("'View more' button not found")
-                else:
-                    logger.info(f"'View more' button disappeared after {clicks} clicks")
-                break
-        
-        return clicks
-
-
 class BandcampParser:
-    """Parser for Bandcamp releases."""
-    
-    BASE_URL = "https://bandcamp.com"
+    """Fetches Bandcamp releases via Bandcamp's internal discover API.
+
+    Bandcamp's anti-bot layer challenges the HTML /discover pages (and any
+    browser automation hitting them, even through a clean residential
+    proxy), but not this internal JSON endpoint, which plain HTTP requests
+    can call directly.
+    """
+
     DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    
+
+    # Bandcamp's internal API backing the /discover page. Only understands
+    # ~15 curated top-level genre slugs (e.g. "punk") via the "g" param -
+    # subgenres/community tags fall back to "g": "all" server-side, which
+    # we detect and treat as "not supported here".
+    DISCOVER_API_URL = "https://bandcamp.com/api/discover/3/get_web"
+
+    # Empirically observed items-per-page for the discover API (it ignores
+    # any "size" param we send and always returns this many, except on the
+    # last page of a genre's result set).
+    GENRE_PAGE_SIZE = 48
+
+    # The discover API's "g" param only accepts Bandcamp's ~15-20 curated
+    # top-level genre slugs. Our tags that aren't themselves one of those
+    # (subgenres / community tags like "hardcore punk" or "d-beat") are
+    # mapped here to the closest curated parent genre, found by cross-
+    # referencing against Bandcamp's own curated genre/subgenre list (see
+    # punk/metal subgenre entries: hardcore-punk, crust-punk, post-punk,
+    # punk-rock, garage under "punk"; hardcore, metalcore under "metal";
+    # techno, happy-hardcore under "electronic").
+    GENRE_FALLBACK = {
+        'hardcore': 'metal',
+        'hc': 'metal',
+        'hardcore-punk': 'punk',
+        'hcpunk': 'punk',
+        'raw-punk': 'punk',
+        'd-beat': 'punk',
+        'dbeat': 'punk',
+        'crust-punk': 'punk',
+        'post-punk': 'punk',
+        'punk-rock': 'punk',
+        'metalcore': 'metal',
+        'egg-punk': 'punk',
+        'street-punk': 'punk',
+        'uk82': 'punk',
+        'h8000': 'metal',
+        'garage-punk': 'punk',
+        'techno': 'electronic',
+        'happy-hardcore': 'electronic',
+    }
+
     def __init__(
         self,
-        base_url: str = BASE_URL,
         user_agent: Optional[str] = None,
         request_delay: float = 1.5,
-        use_selenium: bool = True
+        shutdown_event: Optional[threading.Event] = None,
+        genre_fallback: Optional[Dict[str, str]] = None,
     ):
         """Initialize parser."""
-        self.base_url = base_url.rstrip('/')
         self.request_delay = request_delay
-        self.use_selenium = use_selenium and SELENIUM_AVAILABLE
-        
-        # HTTP session
+        # Signaled by the main thread on SIGTERM/SIGINT so a shutdown can
+        # skip remaining tags instead of racing the cleanup.
+        self.shutdown_event = shutdown_event or threading.Event()
+
+        # Informal-tag -> curated-genre mapping (see GENRE_FALLBACK below).
+        # Defaults to the built-in dict so this class stays usable standalone
+        # (e.g. from run_once.py) without a Config instance; callers that
+        # have one (main.py) pass config.genre_fallback instead, which layers
+        # in any admin-edited overrides.
+        self.genre_fallback = genre_fallback if genre_fallback is not None else self.GENRE_FALLBACK
+
+        # Several of our configured tags map to the same curated genre (see
+        # GENRE_FALLBACK). A per-genre page cursor lets each subsequent tag
+        # mapped to the same genre fold in a different supplemental page
+        # instead of only ever re-fetching page 0.
+        self._genre_page_cursor: Dict[str, int] = {}
+
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': user_agent or self.DEFAULT_USER_AGENT,
@@ -216,259 +118,148 @@ class BandcampParser:
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
         })
-        
-        # Selenium driver
-        self.driver = None
-        self._helper: Optional[SeleniumHelper] = None
-        
-        if self.use_selenium:
-            self._init_driver()
-        elif use_selenium and not SELENIUM_AVAILABLE:
-            logger.warning("Selenium not available. Install: pip install selenium")
-    
-    def _init_driver(self) -> None:
-        """Initialize Selenium WebDriver."""
-        try:
-            options = Options()
-            options.add_argument('--headless')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--disable-blink-features=AutomationControlled')
-            options.add_argument('--window-size=1280,720')
-            options.add_argument('--disable-images')
-            options.add_argument('--blink-settings=imagesEnabled=false')
-            options.add_argument(f'user-agent={self.session.headers["User-Agent"]}')
-            
-            # Linux-specific options
-            if platform.system() != 'Windows':
-                options.add_argument('--no-sandbox')
-                options.add_argument('--disable-dev-shm-usage')
-            
-            self.driver = webdriver.Chrome(options=options)
-            self.driver.set_page_load_timeout(SeleniumHelper.PAGE_LOAD_TIMEOUT)
-            self.driver.implicitly_wait(SeleniumHelper.IMPLICIT_WAIT)
-            self._helper = SeleniumHelper(self.driver)
-            
-            logger.info("Selenium WebDriver initialized")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Selenium: {e}")
-            logger.warning("Falling back to requests")
-            self.use_selenium = False
-            self.driver = None
-    
-    def _restart_driver(self) -> bool:
-        """Restart Selenium driver."""
-        if not self.use_selenium:
-            return False
-        
-        try:
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except Exception:
-                    pass
-                self.driver = None
-            
-            self._init_driver()
-            return self.driver is not None
-            
-        except Exception as e:
-            logger.error(f"Failed to restart driver: {e}")
-            return False
-    
-    def __del__(self):
-        """Cleanup."""
-        # Suppress urllib3 warnings during shutdown
-        logging.getLogger('urllib3').setLevel(logging.ERROR)
-        if self.driver:
-            try:
-                self.driver.quit()
-                self.driver = None
-            except Exception:
-                pass
-    
-    def _fetch_with_requests(self, url: str, retries: int = 2) -> Optional[str]:
-        """Fetch page using requests library."""
-        for attempt in range(retries):
-            try:
-                time.sleep(self.request_delay)
-                response = self.session.get(url, timeout=10)
-                response.raise_for_status()
-                return response.text
-            except requests.Timeout:
-                logger.warning(f"Timeout fetching {url} (attempt {attempt + 1})")
-                time.sleep(3 * (attempt + 1))
-            except requests.RequestException as e:
-                logger.error(f"Request error: {e}")
-                if attempt < retries - 1:
-                    time.sleep(2 * (attempt + 1))
-        return None
-    
-    def _fetch_with_selenium(
-        self, 
-        url: str, 
-        click_view_more: bool = False,
-        retries: int = 2
-    ) -> Optional[str]:
-        """Fetch page using Selenium."""
-        if not self.driver or not self._helper:
-            return None
-        
-        for attempt in range(retries):
-            try:
-                self.driver.get(url)
-                time.sleep(SeleniumHelper.ACTION_DELAY)
-                
-                # Handle cookie consent
-                self._helper.accept_cookies()
-                time.sleep(SeleniumHelper.ACTION_DELAY)
-                
-                # Click view more if requested
-                if click_view_more:
-                    logger.info("Clicking 'View more results'...")
-                    clicks = self._helper.click_view_more()
-                    if clicks > 0:
-                        logger.info(f"✓ Clicked 'View more' {clicks} time(s)")
-                
-                return self.driver.page_source
-                
-            except Exception as e:
-                logger.warning(f"Selenium error (attempt {attempt + 1}): {e}")
-                if attempt < retries - 1:
-                    self._restart_driver()
-                    time.sleep(3 * (attempt + 1))
-        
-        return None
-    
-    def _fetch_page(self, url: str, click_view_more: bool = False) -> Optional[str]:
-        """Fetch page HTML."""
-        if self.use_selenium and self.driver:
-            html = self._fetch_with_selenium(url, click_view_more)
-            if html:
-                return html
-            logger.warning("Selenium failed, falling back to requests")
-        
-        return self._fetch_with_requests(url)
-    
-    def _parse_release_link(self, link, tag: str) -> Optional[Release]:
-        """Parse release from link element."""
-        href = link.get('href', '')
-        if not href:
-            return None
-        
-        # Clean and normalize URL
-        href = href.split('?')[0]
-        if not href.startswith('http'):
-            release_url = urljoin(self.base_url, href)
-        else:
-            release_url = href
-        
-        # Extract title and artist
-        text = link.get_text(strip=True)
-        title, artist = None, None
-        
-        if 'by' in text.lower():
-            parts = re.split(r'\s+by\s+', text, flags=re.IGNORECASE)
-            if len(parts) >= 2:
-                title = parts[0].strip()
-                artist = parts[-1].strip()
-        
-        # Try parent elements
-        if not title or not artist:
-            parent = link.parent
-            if parent:
-                for elem in parent.find_all(['div', 'span']):
-                    cls = str(elem.get('class', [])).lower()
-                    if 'title' in cls or 'name' in cls:
-                        title = title or elem.get_text(strip=True)
-                    if 'artist' in cls or 'by' in cls:
-                        artist = artist or elem.get_text(strip=True)
-        
-        # Fallback
-        if not title:
-            title = text.split('by')[0].strip() if 'by' in text else text
-        
-        if not artist:
-            match = re.search(r'https?://([^.]+)\.bandcamp\.com', release_url)
-            if match:
-                artist = match.group(1).replace('-', ' ').title()
-            else:
-                artist = "Unknown Artist"
-        
+
+    def _parse_api_item(self, item: dict, tag: str) -> Optional[Release]:
+        """Convert one discover-API item into a Release."""
+        title = item.get('primary_text')
         if not title:
             return None
-        
-        # Extract cover image
-        cover_url = None
-        img = link.find('img')
-        if not img and link.parent:
-            img = link.parent.find('img')
-        if img:
-            cover_url = img.get('src') or img.get('data-src')
-            if cover_url and not cover_url.startswith('http'):
-                cover_url = urljoin(self.base_url, cover_url)
-        
-        return Release(
-            url=release_url,
-            title=title,
-            artist=artist,
-            tags=[tag],
-            cover_url=cover_url
+
+        url_hints = item.get('url_hints') or {}
+        host = url_hints.get('custom_domain') or (
+            f"{url_hints.get('subdomain')}.bandcamp.com" if url_hints.get('subdomain') else None
         )
-    
+        slug = url_hints.get('slug')
+        if not host or not slug:
+            return None
+        item_type = url_hints.get('item_type') or item.get('type')
+        path = 'track' if item_type == 't' else 'album'
+        url = f"https://{host}/{path}/{slug}"
+
+        release_date = None
+        raw_date = item.get('publish_date')
+        if raw_date:
+            try:
+                release_date = datetime.strptime(raw_date.replace(' GMT', ''), '%d %b %Y %H:%M:%S')
+            except ValueError:
+                pass
+
+        cover_url = None
+        art_id = item.get('art_id')
+        if art_id:
+            cover_url = f"https://f4.bcbits.com/img/a{int(art_id):010d}_10.jpg"
+
+        is_preorder = item.get('is_preorder')
+
+        return Release(
+            url=url,
+            title=title,
+            artist=item.get('secondary_text') or 'Unknown Artist',
+            tags=[tag or item.get('genre_text')],
+            cover_url=cover_url,
+            release_date=release_date,
+            location=item.get('location_text') or None,
+            is_preorder=bool(is_preorder) if is_preorder is not None else None
+        )
+
+    def _fetch_discover_genre_page(self, genre_slug: str, page: int):
+        """Fetch a single raw page of a curated genre feed. Returns
+        (items, total_count), or None if genre_slug isn't a genre Bandcamp
+        recognizes."""
+        try:
+            response = self.session.post(
+                self.DISCOVER_API_URL,
+                json={'g': genre_slug, 's': 'new', 'f': 'all', 'p': page, 'w': 0},
+                timeout=15
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            logger.debug(f"Discover API request failed for '{genre_slug}' (page {page}): {e}")
+            return [], 0
+
+        if data.get('args', {}).get('g') != genre_slug:
+            return None
+        return data.get('items', []), data.get('total_count') or 0
+
+    def _fetch_discover_genre(self, genre_slug: str, tag_label: Optional[str] = None) -> Optional[List[Release]]:
+        """Fetch a curated top-level genre feed. Always includes page 0
+        (the freshest releases) so genuinely new releases are never missed
+        even when several tags share one fallback genre; also folds in one
+        supplemental, slowly-advancing deeper page per call so those shared
+        tags still get broader catalog coverage over multiple runs. Returns
+        None if Bandcamp didn't recognize genre_slug as a curated genre."""
+        fresh = self._fetch_discover_genre_page(genre_slug, 0)
+        if fresh is None:
+            return None
+        items, total_count = fresh
+
+        deeper_page = self._genre_page_cursor.get(genre_slug, 1)
+        if deeper_page:
+            deeper = self._fetch_discover_genre_page(genre_slug, deeper_page)
+            if deeper is not None:
+                deeper_items, _ = deeper
+                items = items + deeper_items
+
+            total_pages = -(-total_count // self.GENRE_PAGE_SIZE)  # ceil div
+            next_page = deeper_page + 1
+            if next_page >= total_pages:
+                next_page = 1  # page 0 is always fetched separately above
+            self._genre_page_cursor[genre_slug] = next_page
+
+        releases = []
+        seen_urls = set()
+        for item in items:
+            try:
+                release = self._parse_api_item(item, tag_label or genre_slug)
+            except Exception as e:
+                logger.error(f"Error parsing API item: {e}")
+                continue
+            if release and release.url not in seen_urls:
+                seen_urls.add(release.url)
+                releases.append(release)
+        return releases
+
+    def _fetch_via_discover_api(self, tag: str) -> Optional[List[Release]]:
+        """Fetch releases for a tag via Bandcamp's internal discover API.
+        Returns None only if the tag isn't a curated genre AND has no
+        GENRE_FALLBACK mapping."""
+        slug = tag.strip().lower().replace(' ', '-')
+
+        releases = self._fetch_discover_genre(slug)
+        if releases is not None:
+            return releases
+
+        fallback_genre = self.genre_fallback.get(slug)
+        if fallback_genre:
+            logger.info(
+                f"'{tag}' isn't a Bandcamp top-level genre, "
+                f"using broader '{fallback_genre}' feed instead"
+            )
+            return self._fetch_discover_genre(fallback_genre, tag_label=tag)
+
+        return None
+
     def get_releases_by_tag(self, tag: str) -> List[Release]:
         """Get releases by tag from Bandcamp."""
-        releases = []
-        tag_url = tag.replace(' ', '-')
-        
-        # Restart driver for fresh state
-        if self.use_selenium:
-            self._restart_driver()
-            if not self.driver:
-                logger.error(f"Driver not available for tag '{tag}'")
-                return releases
-        
-        url = f"{self.base_url}/discover/{tag_url}?s=new"
-        
-        logger.info(f"Fetching releases for tag '{tag}'")
-        
-        html = self._fetch_page(url, click_view_more=True)
-        if not html:
-            return releases
-        
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Find release links
-        links = soup.find_all('a', href=re.compile(r'/album/|/track/'))
-        
-        # Deduplicate
-        seen = set()
-        unique_links = []
-        for link in links:
-            href = link.get('href', '').split('?')[0]
-            if href and href not in seen:
-                seen.add(href)
-                unique_links.append(link)
-        
-        if not unique_links:
-            logger.warning(f"No releases found for tag '{tag}'")
-            return releases
-        
-        for link in unique_links:
-            try:
-                release = self._parse_release_link(link, tag)
-                if release:
-                    releases.append(release)
-            except Exception as e:
-                logger.error(f"Error parsing release: {e}")
-        
-        logger.info(f"Found {len(releases)} releases for tag '{tag}'")
+        if self.shutdown_event.is_set():
+            return []
+
+        releases = self._fetch_via_discover_api(tag)
+        if releases is None:
+            logger.warning(
+                f"'{tag}' has no working data source (not a Bandcamp genre "
+                f"and no GENRE_FALLBACK mapping) - add one in parser.py"
+            )
+            return []
+
+        logger.info(f"Fetched {len(releases)} releases for tag '{tag}' via Bandcamp API")
         return releases
-    
+
     def get_releases_generator(self, tags: List[str]) -> Generator[Release, None, None]:
         """Generator yielding unique releases from all tags."""
         seen_urls = set()
-        
+
         for tag in tags:
             for release in self.get_releases_by_tag(tag):
                 if release.url not in seen_urls:

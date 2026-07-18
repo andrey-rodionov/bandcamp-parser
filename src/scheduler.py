@@ -23,15 +23,19 @@ class TaskScheduler:
     COALESCE = True
     MISFIRE_GRACE_TIME = 300  # 5 minutes
     
-    def __init__(self, times: List[str], timezone: str = "UTC"):
+    def __init__(self, times: List[str], timezone: str = "UTC", jitter_seconds: int = 0):
         """Initialize scheduler.
-        
+
         Args:
             times: List of times in "HH:MM" format
             timezone: Timezone string (e.g., "UTC", "Europe/Moscow")
+            jitter_seconds: Random delay (0..N seconds) added after each
+                scheduled time, so runs don't fire at a perfectly
+                predictable moment every time.
         """
         self._times = times
         self._timezone = pytz.timezone(timezone)
+        self._jitter_seconds = jitter_seconds if jitter_seconds > 0 else None
         self._scheduler = BlockingScheduler(timezone=self._timezone)
         self._task_function: Optional[TaskFunction] = None
         self._thread: Optional[threading.Thread] = None
@@ -83,7 +87,8 @@ class TaskScheduler:
                 replace_existing=True,
                 max_instances=self.MAX_INSTANCES,
                 coalesce=self.COALESCE,
-                misfire_grace_time=self.MISFIRE_GRACE_TIME
+                misfire_grace_time=self.MISFIRE_GRACE_TIME,
+                jitter=self._jitter_seconds
             )
             
             logger.info(f"Scheduled task for {time_str} ({self._timezone})")

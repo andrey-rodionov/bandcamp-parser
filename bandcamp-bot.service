@@ -1,0 +1,16 @@
+[Unit]
+Description=Bandcamp Parser Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bandcamp-bot
+Environment=PATH=/opt/bandcamp-bot/venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/bandcamp-bot/venv/bin/python run.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

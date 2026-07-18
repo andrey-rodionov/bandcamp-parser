@@ -17,9 +17,10 @@ class ScheduleConfig:
     """Schedule configuration."""
     times: List[str]
     timezone: str
+    jitter_minutes: int = 0
 
 
-@dataclass  
+@dataclass
 class ParserConfig:
     """Parser configuration."""
     request_delay: float
@@ -39,47 +40,90 @@ class DatabaseConfig:
     """Database configuration."""
     db_path: str
     cleanup_days: int
+    disk_usage_threshold_percent: float = 0.0
+    disk_usage_target_percent: float = 75.0
 
 
 class Config:
     """Application configuration."""
-    
+
     # Default values
     DEFAULT_SCHEDULE_TIMES = ["08:00", "14:00", "22:00"]
     DEFAULT_TIMEZONE = "UTC"
+    DEFAULT_JITTER_MINUTES = 0
     DEFAULT_TAGS = ["punk", "hardcore"]
     DEFAULT_REQUEST_DELAY = 1.5
     DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     DEFAULT_MAX_DESC_LENGTH = 0
     DEFAULT_DB_PATH = "bandcamp_releases.db"
     DEFAULT_CLEANUP_DAYS = 90
-    
-    def __init__(self, config_path: str = "config.yaml"):
+    DEFAULT_DISK_USAGE_THRESHOLD_PERCENT = 85.0
+    DEFAULT_DISK_USAGE_TARGET_PERCENT = 75.0
+
+    def __init__(self, config_path: str = "config.yaml", overrides_path: str = "config.overrides.yaml"):
         """Initialize configuration from YAML file and environment variables."""
         self._config_path = Path(config_path)
         self._raw_config = self._load_yaml()
         self._validate_env_vars()
-        
+
+        # Bot-writable overrides (e.g. from Telegram admin commands), layered
+        # on top of the human-maintained config.yaml above. Re-read whenever
+        # the file's mtime changes rather than once at startup, so changes
+        # that don't need a restart (tags/blacklist) take effect immediately.
+        self._overrides_path = Path(overrides_path)
+        self._overrides_mtime: Optional[float] = None
+        self._overrides_cache: Dict[str, Any] = {}
+
     def _load_yaml(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
         if not self._config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {self._config_path}")
-        
+
         with open(self._config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) or {}
-        
+
         logger.debug(f"Loaded configuration from {self._config_path}")
         return config
-    
+
+    def _load_overrides(self) -> Dict[str, Any]:
+        """Load bot-writable config overrides, re-parsing only if the file's
+        mtime changed since the last check. Missing file is not an error -
+        it just means no overrides have been written yet."""
+        if not self._overrides_path.exists():
+            self._overrides_mtime = None
+            self._overrides_cache = {}
+            return self._overrides_cache
+
+        mtime = self._overrides_path.stat().st_mtime
+        if mtime != self._overrides_mtime:
+            with open(self._overrides_path, 'r', encoding='utf-8') as f:
+                self._overrides_cache = yaml.safe_load(f) or {}
+            self._overrides_mtime = mtime
+
+        return self._overrides_cache
+
     def _validate_env_vars(self) -> None:
         """Validate required environment variables."""
         if not os.getenv("TELEGRAM_BOT_TOKEN"):
             raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
         if not os.getenv("TELEGRAM_CHAT_ID"):
             raise ValueError("TELEGRAM_CHAT_ID environment variable is required")
-    
+
     def _get(self, *keys: str, default: Any = None) -> Any:
-        """Get nested config value."""
+        """Get nested config value, checking bot-writable overrides first,
+        then falling back to config.yaml, then the given default."""
+        value = self._load_overrides()
+        for key in keys:
+            if isinstance(value, dict):
+                value = value.get(key)
+            else:
+                value = None
+                break
+            if value is None:
+                break
+        if value is not None:
+            return value
+
         value = self._raw_config
         for key in keys:
             if isinstance(value, dict):
@@ -89,25 +133,46 @@ class Config:
             if value is None:
                 return default
         return value
-    
+
     @property
     def schedule(self) -> ScheduleConfig:
         """Get schedule configuration."""
         return ScheduleConfig(
             times=self._get("schedule", "times", default=self.DEFAULT_SCHEDULE_TIMES),
-            timezone=self._get("schedule", "timezone", default=self.DEFAULT_TIMEZONE)
+            timezone=self._get("schedule", "timezone", default=self.DEFAULT_TIMEZONE),
+            jitter_minutes=self._get("schedule", "jitter_minutes", default=self.DEFAULT_JITTER_MINUTES)
         )
-    
+
     @property
     def tags(self) -> List[str]:
         """Get list of tags to monitor."""
         return self._get("tags", default=self.DEFAULT_TAGS)
-    
+
     @property
     def blacklist_tags(self) -> List[str]:
         """Get list of blacklist tags."""
         return self._get("blacklist_tags", default=[])
-    
+
+    @property
+    def genre_fallback(self) -> Dict[str, str]:
+        """Get the informal-tag -> curated-genre fallback mapping, merging
+        BandcampParser's built-in defaults with any bot-written overrides.
+        An override value of None deletes that key from the result (lets
+        admin commands remove a mapping, not just add/replace one)."""
+        # Imported locally to avoid a module-load-order dependency between
+        # config.py and parser.py (the `config = Config()` singleton below
+        # is constructed at import time).
+        from src.parser import BandcampParser
+
+        mapping = dict(BandcampParser.GENRE_FALLBACK)
+        overrides = self._load_overrides().get("genre_fallback") or {}
+        for tag, genre in overrides.items():
+            if genre is None:
+                mapping.pop(tag, None)
+            else:
+                mapping[tag] = genre
+        return mapping
+
     @property
     def parser(self) -> ParserConfig:
         """Get parser configuration."""
@@ -115,7 +180,7 @@ class Config:
             request_delay=self._get("parser", "request_delay", default=self.DEFAULT_REQUEST_DELAY),
             user_agent=self._get("parser", "user_agent", default=self.DEFAULT_USER_AGENT)
         )
-    
+
     @property
     def telegram(self) -> TelegramConfig:
         """Get Telegram configuration."""
@@ -124,56 +189,22 @@ class Config:
             chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
             max_description_length=self._get("telegram", "max_description_length", default=self.DEFAULT_MAX_DESC_LENGTH)
         )
-    
+
     @property
     def database(self) -> DatabaseConfig:
         """Get database configuration."""
         return DatabaseConfig(
             db_path=self._get("database", "db_path", default=self.DEFAULT_DB_PATH),
-            cleanup_days=self._get("database", "cleanup_days", default=self.DEFAULT_CLEANUP_DAYS)
+            cleanup_days=self._get("database", "cleanup_days", default=self.DEFAULT_CLEANUP_DAYS),
+            disk_usage_threshold_percent=self._get(
+                "database", "disk_usage_threshold_percent",
+                default=self.DEFAULT_DISK_USAGE_THRESHOLD_PERCENT
+            ),
+            disk_usage_target_percent=self._get(
+                "database", "disk_usage_target_percent",
+                default=self.DEFAULT_DISK_USAGE_TARGET_PERCENT
+            )
         )
-    
-    # Legacy compatibility properties
-    @property
-    def schedule_times(self) -> List[str]:
-        return self.schedule.times
-    
-    @property
-    def schedule_timezone(self) -> str:
-        return self.schedule.timezone
-    
-    @property
-    def telegram_bot_token(self) -> str:
-        return self.telegram.bot_token
-    
-    @property
-    def telegram_chat_id(self) -> str:
-        return self.telegram.chat_id
-    
-    @property
-    def parser_config(self) -> Dict[str, Any]:
-        """Legacy: Get parser config as dict."""
-        p = self.parser
-        return {
-            "request_delay": p.request_delay,
-            "user_agent": p.user_agent
-        }
-    
-    @property
-    def telegram_config(self) -> Dict[str, Any]:
-        """Legacy: Get telegram config as dict."""
-        return {"max_description_length": self.telegram.max_description_length}
-    
-    @property
-    def database_config(self) -> Dict[str, Any]:
-        """Legacy: Get database config as dict."""
-        d = self.database
-        return {"db_path": d.db_path, "cleanup_days": d.cleanup_days}
-    
-    @property
-    def _config(self) -> Dict[str, Any]:
-        """Legacy: Raw config access."""
-        return self._raw_config
 
 
 # Global config instance

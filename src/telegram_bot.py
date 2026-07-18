@@ -3,7 +3,7 @@ import logging
 import asyncio
 from typing import Any, Protocol
 from telegram import Bot
-from telegram.error import TelegramError, TimedOut, NetworkError
+from telegram.error import TelegramError, TimedOut, NetworkError, RetryAfter
 from telegram.request import HTTPXRequest
 
 logger = logging.getLogger(__name__)
@@ -15,13 +15,16 @@ class ReleaseProtocol(Protocol):
     title: str
     artist: str
     tags: list
+    release_date: Any
+    location: Any
+    is_preorder: Any
 
 
 class TelegramBot:
     """Telegram bot for sending release notifications."""
     
-    # Timeouts
-    TIMEOUT = 10.0
+    # Timeouts (seconds) - increased for unstable networks
+    TIMEOUT = 30.0
     MAX_RETRIES = 5
     
     # Backoff multiplier (seconds)
@@ -61,23 +64,35 @@ class TelegramBot:
         return self._max_description_length
     
     def _format_release_message(self, release: ReleaseProtocol) -> str:
-        """Format release information as Telegram message."""
+        """Format release information as Telegram message.
+
+        Field order: artist, title, genre, publish date, location, link,
+        preorder status.
+        """
         lines = [
-            f"🎵 <b>{self._escape_html(release.title)}</b>",
             f"👤 <b>{self._escape_html(release.artist)}</b>",
-            "",
+            f"🎵 <b>{self._escape_html(release.title)}</b>",
         ]
-        
+
         if release.tags:
-            tags_str = " ".join(
-                f"#{tag.replace(' ', '_').replace('-', '_')}" 
-                for tag in release.tags if tag
-            )
-            lines.append(f"🏷️ {tags_str}")
-            lines.append("")
-        
+            tags_str = ", ".join(tag for tag in release.tags if tag)
+            if tags_str:
+                lines.append(f"🏷️ {self._escape_html(tags_str)}")
+
+        release_date = getattr(release, 'release_date', None)
+        if release_date:
+            lines.append(f"📅 {release_date.strftime('%d %b %Y %H:%M')}")
+
+        location = getattr(release, 'location', None)
+        if location:
+            lines.append(f"📍 {self._escape_html(location)}")
+
         lines.append(f"🔗 <a href='{release.url}'>Open on Bandcamp</a>")
-        
+
+        is_preorder = getattr(release, 'is_preorder', None)
+        if is_preorder is not None:
+            lines.append(f"⏳ Preorder: {'Yes' if is_preorder else 'No'}")
+
         return "\n".join(lines)
     
     @staticmethod
@@ -116,6 +131,19 @@ class TelegramBot:
                     )
                     return False
                     
+            except RetryAfter as e:
+                # Respect Telegram flood control hints where possible
+                wait_time = int(getattr(e, "retry_after", self.BACKOFF_MULTIPLIER * (attempt + 1)))
+                logger.warning(
+                    f"Telegram rate limit for {error_context}: retry after {wait_time}s "
+                    f"(attempt {attempt + 1}/{self.MAX_RETRIES})"
+                )
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"Failed to send {error_context} due to repeated rate limits")
+                return False
+
             except TelegramError as e:
                 logger.error(f"Telegram error sending {error_context}: {e}")
                 return False

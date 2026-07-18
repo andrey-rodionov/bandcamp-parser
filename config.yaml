@@ -1,10 +1,9 @@
 # Configuration file for Bandcamp Parser Bot
 
 # Schedule configuration (24-hour format)
-# Every hour from 07:00 to 01:00
+# Every hour from 08:00 to 00:00 UTC
 schedule:
   times:
-    - "07:00"
     - "08:00"
     - "09:00"
     - "10:00"
@@ -22,8 +21,10 @@ schedule:
     - "22:00"
     - "23:00"
     - "00:00"
-    - "01:00"
-  timezone: "Europe/Moscow"  # Change to your timezone
+  timezone: "UTC"
+  # Random delay (0..N minutes) added after each scheduled time, so runs
+  # don't fire at a perfectly predictable :00 mark every time.
+  jitter_minutes: 8
 
 # Tags to monitor
 tags:
@@ -34,7 +35,6 @@ tags:
   - "d-beat"
   - "dbeat"
   - "crust punk"
-  - "post punk"
   - "hcpunk"
   - "punk rock"
   - "metalcore"
@@ -71,5 +71,11 @@ telegram:
 database:
   # Path to SQLite database file
   db_path: "bandcamp_releases.db"
-  # Cleanup old records older than N days (0 = never cleanup)
-  cleanup_days: 90
+  # Cleanup old records older than N days (0 = never cleanup - disabled,
+  # relying on disk_usage_threshold_percent below instead)
+  cleanup_days: 0
+  # Emergency cleanup: once disk usage on the database's filesystem hits
+  # this percent, delete the oldest records (regardless of cleanup_days)
+  # until usage drops back to disk_usage_target_percent (0 = disabled)
+  disk_usage_threshold_percent: 85
+  disk_usage_target_percent: 75

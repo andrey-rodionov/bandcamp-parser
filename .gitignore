@@ -27,6 +27,9 @@ wheels/
 .env
 .venv
 
+# Bot-writable config overrides (written by Telegram admin commands)
+config.overrides.yaml
+
 # Database
 *.db
 *.sqlite
