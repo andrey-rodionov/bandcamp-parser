@@ -30,6 +30,9 @@ wheels/
 # Bot-writable config overrides (written by Telegram admin commands)
 config.overrides.yaml
 
+# Server access notes (contains credentials, never commit)
+SERVER_CHEATSHEET.txt
+
 # Database
 *.db
 *.sqlite
