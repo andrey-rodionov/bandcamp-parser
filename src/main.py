@@ -110,7 +110,16 @@ class BandcampBot:
         # Check if exists
         if self.db.exists(release.url):
             return False
-        
+
+        # Refine the generic genre label (assigned via GENRE_FALLBACK) with
+        # the release's actual applied tags, fetched from its own page -
+        # confirms a specific subgenre tag (e.g. "hardcore-punk") is
+        # genuinely present rather than just inferred from the broader
+        # parent-genre feed it was fetched from.
+        real_tags = self.parser.fetch_release_tags(release.url)
+        if real_tags:
+            release.tags = real_tags
+
         # Add to database first (even if sending fails)
         added = self.db.add(
             release_url=release.url,
@@ -185,7 +194,13 @@ class BandcampBot:
                 # Check if exists
                 if self.db.exists(release.url):
                     continue
-                
+
+                # Refine the generic genre label with the release's actual
+                # applied tags - see _process_release for why.
+                real_tags = self.parser.fetch_release_tags(release.url)
+                if real_tags:
+                    release.tags = real_tags
+
                 # Add to database first (even if sending fails)
                 added = self.db.add(
                     release_url=release.url,

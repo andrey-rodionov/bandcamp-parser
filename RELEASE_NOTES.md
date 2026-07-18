@@ -1,5 +1,42 @@
 # Release Notes
 
+## Version 2.0.1 - Real Tag Verification for Genre-Fallback Releases
+
+### Summary
+The discover API only ever reports a release's single curated parent genre
+(e.g. "punk"), never the specific tags an artist actually applied (e.g.
+"hardcore punk", "d-beat"). For tags served via `GENRE_FALLBACK`, this made
+it impossible to confirm a release genuinely carried the tag it was found
+under, rather than just happening to share its parent genre. Adds a check
+that fetches each newly found release's own page - which, unlike
+`/discover`, is server-rendered and lists every tag the artist applied - and
+uses the real tags for both storage and the Telegram message.
+
+### Changes
+
+#### New Features
+- `BandcampParser.fetch_release_tags()`: fetches a release's own page and
+  extracts its full, real tag list from the server-rendered tag links
+- New releases now have their tags refined with this real list before being
+  saved and sent, in both the main-tags and blacklist processing paths
+
+### Technical Details
+- Verified against real releases: sampling fresh "punk"-genre results
+  fetched for the "hardcore punk" tag, roughly a quarter carried the
+  `hardcore-punk` tag specifically (the rest were plain "punk" or informal
+  variants like "punk-hardcore"/"crustpunk") - confirming genuinely
+  tagged releases are captured through the genre-fallback feed, not just
+  releases that happen to share the parent genre
+- Adds one extra HTTP GET per newly discovered release (not per genre-feed
+  page), since release pages are only fetched for releases not already in
+  the database
+
+### Database Impact
+- No schema changes - the `tags` column now stores the release's real tags
+  when available, instead of the generic parent-genre label
+
+---
+
 ## Version 2.0.0 - API-Based Scraping, Admin Commands, and Reliability Fixes
 
 ### Summary

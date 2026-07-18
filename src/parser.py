@@ -1,5 +1,6 @@
 """Bandcamp parser module."""
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -239,6 +240,29 @@ class BandcampParser:
             return self._fetch_discover_genre(fallback_genre, tag_label=tag)
 
         return None
+
+    # Matches the tag links Bandcamp renders on a release's own page, e.g.
+    # <a class="tag" href="https://bandcamp.com/discover/hardcore-punk?...">
+    _RELEASE_TAG_RE = re.compile(r'<a class="tag" href="https://bandcamp\.com/discover/([^"?]+)\?')
+
+    def fetch_release_tags(self, url: str) -> List[str]:
+        """Fetch a release's own page and extract the full list of tags the
+        artist actually applied (as normalized slugs, e.g. "hardcore-punk").
+
+        Unlike /discover, individual release pages are server-rendered
+        (no anti-bot challenge, no JS needed), and the discover API's
+        genre_text only ever reports the single curated parent genre - this
+        is the only way to see a release's real, specific tags. Used to
+        verify/refine the generic genre label a release picked up via
+        GENRE_FALLBACK with what the artist actually tagged it."""
+        try:
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+        except Exception as e:
+            logger.debug(f"Could not fetch tags for {url}: {e}")
+            return []
+
+        return self._RELEASE_TAG_RE.findall(response.text)
 
     def get_releases_by_tag(self, tag: str) -> List[Release]:
         """Get releases by tag from Bandcamp."""
