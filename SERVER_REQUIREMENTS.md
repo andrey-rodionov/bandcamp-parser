@@ -2,31 +2,33 @@
 
 ## Current Configuration
 
-- **Tags:** 18 main + 3 blacklist
-- **Schedule:** every hour from 07:00 to 01:00 (19 runs/day)
+- **Tags:** 17 main + 3 blacklist
+- **Schedule:** every hour from 08:00 to 00:00 UTC (17 runs/day)
 
 ## Minimum Requirements
 
+Since the bot fetches releases via a plain HTTP API call instead of driving
+a headless browser, its footprint is small.
+
 | Parameter | Minimum | Recommended |
 |-----------|---------|-------------|
-| **CPU** | 1 vCPU | 2 vCPU |
-| **RAM** | 512 MB | 1 GB |
-| **Disk** | 2 GB | 10 GB SSD |
-| **Network** | 1 Mbps | 5 Mbps |
+| **CPU** | 1 vCPU | 1 vCPU |
+| **RAM** | 256 MB | 512 MB |
+| **Disk** | 1 GB | 5 GB SSD |
+| **Network** | 512 Kbps | 1 Mbps |
 
 ### Memory Distribution
 
-- Python: ~100 MB
-- Chrome headless: ~300 MB
-- SQLite: ~50 MB
-- System: ~200 MB
+- Python process (parsing + Telegram bot + admin bot + scheduler): ~40-60 MB
+- SQLite: ~30-50 MB
+- System: ~150 MB
 
 ## Recommended Configuration
 
 ```
-CPU: 2 vCPU
-RAM: 1 GB
-Disk: 10 GB SSD
+CPU: 1 vCPU
+RAM: 512 MB
+Disk: 5 GB SSD
 OS: Ubuntu 22.04 LTS
 ```
 
@@ -40,13 +42,11 @@ sudo apt-get update && sudo apt-get upgrade -y
 sudo apt-get install -y \
     python3 \
     python3-pip \
-    python3-venv \
-    chromium-browser \
-    chromium-chromedriver
+    python3-venv
 
 # Project
 cd /opt
-git clone <repo> bandcamp-bot
+git clone https://github.com/andrey-rodionov/bandcamp-parser.git bandcamp-bot
 cd bandcamp-bot
 
 # Virtual environment
@@ -55,13 +55,16 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Configuration
+cp .env.example .env
 nano .env
 nano config.yaml
 ```
 
 ## systemd
 
-Create `/etc/systemd/system/bandcamp-bot.service`:
+A ready-to-use unit file is included at `bandcamp-bot.service` in the
+repository - adjust `WorkingDirectory`/paths as needed and copy it to
+`/etc/systemd/system/bandcamp-bot.service`:
 
 ```ini
 [Unit]
@@ -76,6 +79,7 @@ Environment=PATH=/opt/bandcamp-bot/venv/bin
 ExecStart=/opt/bandcamp-bot/venv/bin/python run.py
 Restart=always
 RestartSec=10
+TimeoutStopSec=180
 
 [Install]
 WantedBy=multi-user.target
@@ -95,7 +99,8 @@ sudo systemctl start bandcamp-bot
 
 1. Start with 2-3 tags in `config.yaml`
 2. Run `python run_once.py`
-3. After DB is populated, add remaining tags
+3. After DB is populated, add remaining tags (directly in `config.yaml`, or
+   via `/tags_add` in Telegram once the service is running)
 4. Start the service
 
 ## Monitoring
@@ -114,19 +119,21 @@ htop
 sqlite3 /opt/bandcamp-bot/bandcamp_releases.db "SELECT COUNT(*) FROM releases;"
 ```
 
+You can also check `/status` in Telegram for DB stats, disk usage, and the
+last successful run time without shelling in.
+
 ## Log Rotation
 
-Create `/etc/logrotate.d/bandcamp-bot`:
+Handled in-process (daily rotation, 4 weeks retained) - no `logrotate`
+configuration needed.
 
-```
-/opt/bandcamp-bot/bandcamp_bot.log {
-    daily
-    rotate 7
-    compress
-    missingok
-    notifempty
-}
-```
+## Database Cleanup
+
+The database prunes itself two ways, both configurable in `config.yaml`:
+- `cleanup_days` — delete records older than N days (disabled by default)
+- `disk_usage_threshold_percent` / `disk_usage_target_percent` — once disk
+  usage crosses the threshold, delete the oldest records (regardless of age)
+  until usage drops back down, then reclaim the space with `VACUUM`
 
 ## VPS Providers
 
@@ -140,6 +147,6 @@ Create `/etc/logrotate.d/bandcamp-bot`:
 ## Scaling
 
 For 50+ tags:
-- RAM: 2 GB
-- CPU: 2-4 vCPU
+- RAM: 1 GB
+- CPU: 2 vCPU
 - Consider PostgreSQL

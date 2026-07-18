@@ -3,8 +3,9 @@
 ## Requirements
 
 - Python 3.9+
-- Google Chrome
-- ChromeDriver
+
+No browser or driver installation needed - the bot talks to Bandcamp over
+plain HTTP.
 
 ## Installation in 5 Minutes
 
@@ -25,6 +26,10 @@ pip install -r requirements.txt
 
 ### 3. Create .env
 
+```bash
+cp .env.example .env
+```
+
 ```env
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_CHAT_ID=123456789
@@ -35,10 +40,11 @@ TELEGRAM_CHAT_ID=123456789
 ```yaml
 schedule:
   times:
-    - "07:00"
+    - "08:00"
     - "12:00"
     - "18:00"
-  timezone: "Europe/Moscow"
+  timezone: "UTC"
+  jitter_minutes: 8
 
 tags:
   - "punk"
@@ -64,7 +70,8 @@ python run_once.py
 
 ## ⚠️ First Run
 
-**On the first run**, the bot will send **all current releases** from the selected tag pages — this can be many messages!
+**On the first run**, the bot will send **all current releases** from the
+selected tags - this can be many messages!
 
 **On subsequent runs** — only new releases not in the database.
 
@@ -82,10 +89,11 @@ Time format: `"HH:MM"` (24-hour)
 ```yaml
 schedule:
   times:
-    - "07:00"  # 7 AM
-    - "14:00"  # 2 PM
-    - "22:00"  # 10 PM
-  timezone: "Europe/Moscow"
+    - "08:00"
+    - "14:00"
+    - "22:00"
+  timezone: "UTC"
+  jitter_minutes: 8  # random delay (minutes) added after each run time
 ```
 
 ### Timezones
@@ -105,6 +113,10 @@ tags:
   - "crust punk"
 ```
 
+Tags that aren't one of Bandcamp's own curated genres are automatically
+mapped to the closest one (see `GENRE_FALLBACK` in `src/parser.py`, or the
+`/genre_list` Telegram command once the bot is running).
+
 ### Blacklist
 
 Releases from these tags are added to DB but **not sent**:
@@ -116,10 +128,16 @@ blacklist_tags:
   - "techno"
 ```
 
+## Reconfiguring after launch
+
+Once the bot is running, you can add/remove tags and blacklist entries,
+change the schedule, and edit genre mappings directly from Telegram instead
+of editing files - send `/help` to the bot's chat for the full command list.
+
 ## Verification
 
 After launch:
-1. Bot sends startup message
+1. Bot sends a startup message
 2. Starts working on schedule
 3. Logs in `bandcamp_bot.log`
 
@@ -134,6 +152,7 @@ After launch:
 | `run.py` | Run with schedule |
 | `run_once.py` | One-time run |
 | `config.yaml` | Settings |
-| `.env` | Tokens |
-| `bandcamp_bot.log` | Logs |
+| `config.overrides.yaml` | Bot-writable overrides from Telegram admin commands (created automatically) |
+| `.env` | Tokens (copy from `.env.example`) |
+| `bandcamp_bot.log` | Logs (rotated daily, 4 weeks kept) |
 | `bandcamp_releases.db` | Database |

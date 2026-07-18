@@ -3,8 +3,9 @@
 ## Requirements
 
 - Python 3.9+
-- Google Chrome
-- ChromeDriver
+
+No browser or driver installation needed - the bot talks to Bandcamp over
+plain HTTP.
 
 ## Step 1: Install Python
 
@@ -15,11 +16,7 @@
    python --version
    ```
 
-## Step 2: Install Chrome
-
-Download and install [Google Chrome](https://www.google.com/chrome/)
-
-## Step 3: Prepare Project
+## Step 2: Prepare Project
 
 Open Command Prompt (`Win + R` → `cmd`)
 
@@ -33,20 +30,18 @@ python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-If Pillow fails:
-```cmd
-pip install --only-binary :all: Pillow
-```
-
-## Step 4: Create Telegram Bot
+## Step 3: Create Telegram Bot
 
 1. [@BotFather](https://t.me/BotFather) → `/newbot`
 2. Copy token
 3. [@userinfobot](https://t.me/userinfobot) → get Chat ID
 
-## Step 5: Configure .env
+## Step 4: Configure .env
 
-Create `.env` file:
+Copy the example file:
+```cmd
+copy .env.example .env
+```
 
 ```env
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
@@ -55,15 +50,16 @@ TELEGRAM_CHAT_ID=123456789
 
 **No quotes!**
 
-## Step 6: Configure config.yaml
+## Step 5: Configure config.yaml
 
 ```yaml
 schedule:
   times:
-    - "07:00"
+    - "08:00"
     - "12:00"
     - "18:00"
-  timezone: "Europe/Moscow"
+  timezone: "UTC"
+  jitter_minutes: 8
 
 tags:
   - "punk"
@@ -76,7 +72,7 @@ parser:
   request_delay: 1.5
 ```
 
-## Step 7: Run
+## Step 6: Run
 
 ```cmd
 # Test (one-time)
@@ -88,7 +84,8 @@ python run.py
 
 ## ⚠️ First Run
 
-**On the first run**, the bot will send **all current releases** — many messages!
+**On the first run**, the bot will send **all current releases** — many
+messages!
 
 **After that** — only new releases.
 
@@ -96,13 +93,13 @@ python run.py
 1. Start with 2-3 tags
 2. After first run, add more tags
 
+## Reconfiguring after launch
+
+Once running, you can add/remove tags and blacklist entries, change the
+schedule, and edit genre mappings directly from Telegram instead of editing
+files - send `/help` to the bot's chat for the full command list.
+
 ## Troubleshooting
-
-### "ChromeDriver not found"
-
-```cmd
-pip install webdriver-manager
-```
 
 ### "ModuleNotFoundError"
 
@@ -111,17 +108,10 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### "Failed to initialize Selenium"
+### A tag returns no releases
 
-- Check Chrome version
-- Reinstall ChromeDriver
-- Disable antivirus
-
-### Pillow installation fails
-
-```cmd
-pip install --only-binary :all: Pillow
-```
+Check `/genre_list` in Telegram - a tag needs either to be one of Bandcamp's
+own curated genres or have a fallback mapping to one.
 
 ## Auto-start
 
@@ -140,5 +130,5 @@ pip install --only-binary :all: Pillow
 
 ## Logs
 
-- `bandcamp_bot.log` — file
+- `bandcamp_bot.log` — file, rotated daily, 4 weeks kept
 - Console — real-time

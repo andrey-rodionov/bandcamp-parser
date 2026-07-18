@@ -1,22 +1,34 @@
 # Bandcamp Parser Bot
 
-A bot for automatic monitoring of new music releases on Bandcamp by specified tags and sending notifications to Telegram.
+A bot for automatic monitoring of new music releases on Bandcamp by
+specified tags, sending notifications to Telegram, and managing itself via
+Telegram commands.
 
 ## Features
 
-- 🔍 **Release parsing** from Bandcamp by configurable tags
+- 🔍 **Release discovery** via Bandcamp's own internal discover API — no
+  browser automation, no headless Chrome
+- 🧭 **Genre fallback mapping** — tags that aren't one of Bandcamp's curated
+  genres (e.g. "hardcore punk", "d-beat") are automatically served from the
+  closest matching genre feed
 - 🚫 **Tag blacklist** — exclude unwanted genres
 - 📱 **Telegram notifications** with release info and link
-- ⏰ **Flexible scheduling** — configurable (hourly by default)
-- 🗄️ **SQLite database** for tracking sent releases
-- 🌐 **Selenium WebDriver** for dynamic content
+- 🛠️ **Telegram admin commands** — change tags, blacklist, schedule, and
+  genre mappings without touching the server
+- ⏰ **Flexible scheduling** with jitter — configurable run times plus a
+  random delay so runs aren't perfectly predictable
+- 🗄️ **SQLite database** for tracking sent releases, with both age-based and
+  disk-usage-based cleanup
 - 🔄 **Automatic retries** on network failures
 
 ## Important: First Run
 
-⚠️ **On the first run**, the bot will add to the database and send to Telegram **all releases** currently on the pages of selected tags. This can be many messages!
+⚠️ **On the first run**, the bot will add to the database and send to
+Telegram **all releases** currently returned for the selected tags. This can
+be many messages!
 
-**On subsequent runs**, the bot will only send **new releases** that are not yet in the database.
+**On subsequent runs**, the bot will only send **new releases** that are not
+yet in the database.
 
 ### Recommendations for first run:
 
@@ -36,50 +48,40 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Install Chrome and ChromeDriver
+No browser or driver installation needed - the bot talks to Bandcamp over
+plain HTTP.
 
-**macOS:**
-```bash
-brew install --cask google-chrome
-brew install chromedriver
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get update
-sudo apt-get install -y chromium-browser chromium-chromedriver
-```
-
-**Windows:**
-- Install [Google Chrome](https://www.google.com/chrome/)
-- ChromeDriver will be installed automatically
-
-### 3. Create Telegram Bot
+### 2. Create Telegram Bot
 
 1. Open [@BotFather](https://t.me/BotFather) in Telegram
 2. Send `/newbot` and follow instructions
 3. Copy the bot token
 4. Get your Chat ID via [@userinfobot](https://t.me/userinfobot)
 
-### 4. Configure .env
+### 3. Configure .env
 
-Create `.env` file in project root:
+Copy the example file and fill in your own values:
+
+```bash
+cp .env.example .env
+```
 
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-### 5. Configure config.yaml
+### 4. Configure config.yaml
 
 ```yaml
-# Schedule (every hour from 07:00 to 01:00)
+# Schedule (every hour from 08:00 to 00:00 UTC)
 schedule:
   times:
-    - "07:00"
     - "08:00"
+    - "09:00"
     # ... etc.
-  timezone: "Europe/Moscow"
+  timezone: "UTC"
+  jitter_minutes: 8   # random delay added after each run time
 
 # Tags to monitor
 tags:
@@ -96,7 +98,7 @@ parser:
   request_delay: 1.5         # Delay between requests (sec)
 ```
 
-### 6. Run
+### 5. Run
 
 **Continuous scheduled operation:**
 ```bash
@@ -114,8 +116,9 @@ python run_once.py
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `times` | List of run times (HH:MM) | `["07:00", "12:00", "18:00"]` |
-| `timezone` | Timezone | `"Europe/Moscow"` |
+| `times` | List of run times (HH:MM) | `["08:00", "12:00", "18:00"]` |
+| `timezone` | Timezone | `"UTC"` |
+| `jitter_minutes` | Random delay (0..N min) added after each run time | `8` |
 
 ### Tags (`tags`)
 
@@ -128,6 +131,15 @@ tags:
   - "d-beat"
   - "crust punk"
 ```
+
+Bandcamp's internal discover API only accepts its own curated top-level
+genres (e.g. `punk`, `metal`, `electronic`, ~15-20 total). Any tag that
+isn't one of those is looked up in a genre-fallback table
+(`GENRE_FALLBACK` in `src/parser.py`) and served from the closest matching
+genre feed instead — e.g. `"hardcore punk"` and `"d-beat"` both fall back to
+the `punk` feed, `"metalcore"` falls back to `metal`. You can review or
+change these mappings live via the `/genre_list`, `/genre_set`, and
+`/genre_remove` Telegram commands (see below) instead of editing code.
 
 ### Blacklist (`blacklist_tags`)
 
@@ -157,7 +169,42 @@ blacklist_tags:
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `db_path` | Path to DB file | `bandcamp_releases.db` |
-| `cleanup_days` | Delete records older than N days | `90` |
+| `cleanup_days` | Delete records older than N days (`0` = disabled) | `90` |
+| `disk_usage_threshold_percent` | Once disk usage hits this %, delete the oldest records regardless of age (`0` = disabled) | `85` |
+| `disk_usage_target_percent` | Keep deleting oldest records until usage drops back to this % | `75` |
+
+## Telegram Admin Commands
+
+The bot listens for commands in your own Telegram chat (the one matching
+`TELEGRAM_CHAT_ID`) so you can reconfigure it without SSH access. Messages
+from any other chat are silently ignored.
+
+| Command | Effect | Restart required? |
+|---------|--------|--------------------|
+| `/help` | List available commands | — |
+| `/tags` | Show current tags | — |
+| `/tags_add <tag>` | Add a tag | No — applies next run |
+| `/tags_remove <tag>` | Remove a tag | No — applies next run |
+| `/blacklist` | Show blacklist | — |
+| `/blacklist_add <tag>` | Add to blacklist | No — applies next run |
+| `/blacklist_remove <tag>` | Remove from blacklist | No — applies next run |
+| `/schedule` | Show current schedule | — |
+| `/schedule_set 07:00,10:00,...` | Replace the run times | Yes — bot restarts itself |
+| `/schedule_jitter <minutes>` | Set the jitter window | Yes — bot restarts itself |
+| `/genre_list` | Show tag → genre fallback mappings | — |
+| `/genre_set <tag> <genre>` | Add/change a mapping | Yes — bot restarts itself |
+| `/genre_remove <tag>` | Remove a mapping | Yes — bot restarts itself |
+| `/status` | DB stats, disk usage, last successful run | — |
+
+Changes that need a restart are written to disk first, then the bot restarts
+itself (a few seconds under systemd's `Restart=always`) and comes back up
+with the new settings applied. Tag/blacklist edits don't need a restart at
+all - they're picked up automatically before the next scheduled run.
+
+Admin edits are stored in a separate `config.overrides.yaml` file (created
+automatically on first edit, not checked into version control) layered on
+top of `config.yaml`, so your original config file is never rewritten or
+loses its comments.
 
 ## Project Structure
 
@@ -165,41 +212,46 @@ blacklist_tags:
 .
 ├── src/
 │   ├── __init__.py        # Module exports
-│   ├── config.py          # Configuration (dataclasses)
-│   ├── database.py        # SQLite operations
-│   ├── parser.py          # Bandcamp parser (Selenium)
-│   ├── telegram_bot.py    # Telegram messaging
+│   ├── config.py          # Configuration (dataclasses + overrides layer)
+│   ├── database.py        # SQLite operations + cleanup
+│   ├── parser.py          # Bandcamp discover-API client + genre fallback
+│   ├── telegram_bot.py    # Telegram notification sending
+│   ├── admin_bot.py       # Telegram admin command handling
 │   ├── scheduler.py       # Scheduler (APScheduler)
 │   └── main.py            # Main BandcampBot class
-├── config.yaml            # Settings
-├── .env                   # Secrets (tokens)
-├── requirements.txt       # Python dependencies
-├── run.py                 # Run with schedule
-├── run_once.py            # One-time run
-└── bandcamp_releases.db   # Database (created automatically)
+├── config.yaml             # Settings
+├── config.overrides.yaml   # Bot-writable overrides (created automatically, gitignored)
+├── .env                    # Secrets (tokens) - copy from .env.example
+├── requirements.txt        # Python dependencies
+├── run.py                  # Run with schedule
+├── run_once.py             # One-time run
+└── bandcamp_releases.db    # Database (created automatically)
 ```
 
-## How Parsing Works
+## How It Works
 
-1. **Start WebDriver** — headless Chrome is created
-2. **Load page** — `bandcamp.com/discover/{tag}?s=new`
-3. **Cookie consent** — automatic acceptance
-4. **View more results** — click button to load more
-5. **Parse HTML** — extract release information
-6. **Check DB** — skip already sent releases
-7. **Send to Telegram** — formatted message
-8. **Save to DB** — prevent duplicates
+1. **Fetch releases** — for each tag, the bot resolves it to a Bandcamp
+   curated genre (directly, or via the genre-fallback table) and calls
+   Bandcamp's internal discover API for that genre's newest releases
+2. **Combine pages** — the freshest page is always included, plus one
+   supplemental page that advances on each call, so tags sharing a genre
+   still get broad coverage without ever missing newly published releases
+3. **Check DB** — skip releases already in the database
+4. **Send to Telegram** — formatted message (artist, title, genre, release
+   date, location, link, preorder status)
+5. **Save to DB** — before attempting to send, so a failed send is retried
+   later instead of being lost
 
 ## Logging
 
 Logs are written to:
-- `bandcamp_bot.log` — file
+- `bandcamp_bot.log` — rotated daily, 4 weeks retained
 - Console — real-time
 
 Format:
 ```
-2025-01-04 12:00:00 - src.parser - INFO - Found 25 releases for tag 'punk'
-2025-01-04 12:00:01 - src.telegram_bot - INFO - Sent: Album Name by Artist
+2026-07-18 12:00:00 - src.parser - INFO - Fetched 48 releases for tag 'punk' via Bandcamp API
+2026-07-18 12:00:01 - src.telegram_bot - INFO - Sent: Album Name by Artist
 ```
 
 ## Troubleshooting
@@ -207,30 +259,35 @@ Format:
 ### Bot not sending messages
 
 - Check `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`
-- Make sure bot is added to chat with send permissions
+- Make sure the bot is added to the chat with send permissions
 
-### Selenium not starting
+### A tag returns no releases
 
-- Install Chrome browser
-- Check Chrome/ChromeDriver version compatibility
-- Linux: install `libnss3 libatk-bridge2.0-0 libxkbcommon0`
-
-### Releases not found
-
-- Check tag correctness on Bandcamp website
+- Check the tag has a genre-fallback mapping (`/genre_list`), or is itself
+  one of Bandcamp's curated genres - a tag with neither will log a warning
+  and return nothing
+- Check tag spelling against the Bandcamp website
 - Check logs for errors
 
 ### Tasks not running on schedule
 
-- Check timezone in `timezone`
+- Check `timezone` in `config.yaml` (or via `/schedule`)
 - Time format: `"HH:MM"` (24-hour)
-- Make sure application is running
+- Make sure the application is running
+
+### Admin commands not responding
+
+- Confirm you're messaging from the same chat as `TELEGRAM_CHAT_ID` -
+  commands from any other chat are silently ignored
+- Check the logs for `AdminBot` startup errors
 
 ## Server Deployment
 
 ### systemd (Linux)
 
-Create `/etc/systemd/system/bandcamp-bot.service`:
+A ready-to-use unit file is included at `bandcamp-bot.service` - adjust
+`WorkingDirectory`/paths and copy it to
+`/etc/systemd/system/bandcamp-bot.service`:
 
 ```ini
 [Unit]
@@ -245,6 +302,7 @@ Environment=PATH=/opt/bandcamp-bot/venv/bin
 ExecStart=/opt/bandcamp-bot/venv/bin/python run.py
 Restart=always
 RestartSec=10
+TimeoutStopSec=180
 
 [Install]
 WantedBy=multi-user.target
@@ -266,9 +324,8 @@ sudo systemctl status bandcamp-bot
 ## Technologies
 
 - **Python 3.9+**
-- **Selenium** — dynamic content parsing
-- **BeautifulSoup4** — HTML parsing
-- **python-telegram-bot** — Telegram messaging
+- **requests** — HTTP client for Bandcamp's discover API
+- **python-telegram-bot** — Telegram messaging and admin commands
 - **APScheduler** — task scheduler
 - **SQLite** — database
 
