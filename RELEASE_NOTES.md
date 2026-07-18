@@ -1,5 +1,59 @@
 # Release Notes
 
+## Version 2.0.2 - Direct Tag-Based Search, Removing Genre Guessing
+
+### Summary
+Replaced the genre-fallback mechanism with a second Bandcamp discover
+endpoint that filters directly by tag across every genre, so a release is
+found by the exact tag it carries instead of by guessing which curated
+parent genre it might be filed under. This closes a real gap: a release
+tagged "hardcore punk" but filed by Bandcamp under an unrelated primary
+genre (Rock, Metal, Electronic, etc.) was previously invisible unless that
+other genre happened to also be scanned.
+
+### Changes
+
+#### Breaking / Architecture
+- `BandcampParser` now calls `/api/discover/1/discover_web` with
+  `tag_norm_names` instead of `/api/discover/3/get_web` with a curated
+  genre slug - every configured tag is searched for directly, matching
+  Bandcamp's own real tag data rather than a curated top-level genre
+- Removed `GENRE_FALLBACK` and the whole informal-tag-to-genre mapping
+  table - it's no longer needed since every tag, official or informal, is
+  looked up the same way
+- Removed the `/genre_list`, `/genre_set`, and `/genre_remove` Telegram
+  commands along with `Config.genre_fallback`, since there's no longer a
+  mapping to inspect or edit
+
+#### Technical Details
+- Pagination moved from numeric genre pages to opaque cursors returned by
+  the new endpoint; the freshest page (cursor `"*"`) is always fetched so
+  a genuinely new release is never missed, plus one supplemental page per
+  call that advances through the tag's back catalog over successive runs
+- Verified directly against live results: sampling releases returned for
+  the "hardcore punk" tag, roughly a quarter carried a primary genre other
+  than Punk (Rock, Metal, Alternative, World, Electronic, Experimental) -
+  every one of them was confirmed, via its own release page, to genuinely
+  carry the `hardcore-punk` tag
+- Also verified against several tags with no official subgenre status
+  (`d-beat`, `raw-punk`, `street-punk`, `uk82`, `h8000`, `egg-punk`) -  all
+  return real, matching results the same way
+
+### Database Impact
+- No schema changes
+
+### Migration Notes
+- No action needed - `config.overrides.yaml` entries under `genre_fallback`
+  (if any were ever set via the now-removed commands) are simply ignored
+
+### Testing Recommendations
+1. Confirm releases keep arriving for existing tags after upgrading
+2. Try a tag whose releases often sit under an unrelated primary genre and
+   confirm those releases now come through
+3. Confirm `/genre_list` etc. are gone from `/help` and no longer respond
+
+---
+
 ## Version 2.0.1 - Real Tag Verification for Genre-Fallback Releases
 
 ### Summary

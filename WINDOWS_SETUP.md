@@ -95,9 +95,9 @@ messages!
 
 ## Reconfiguring after launch
 
-Once running, you can add/remove tags and blacklist entries, change the
-schedule, and edit genre mappings directly from Telegram instead of editing
-files - send `/help` to the bot's chat for the full command list.
+Once running, you can add/remove tags and blacklist entries and change the
+schedule directly from Telegram instead of editing files - send `/help` to
+the bot's chat for the full command list.
 
 ## Troubleshooting
 
@@ -110,8 +110,8 @@ pip install -r requirements.txt
 
 ### A tag returns no releases
 
-Check `/genre_list` in Telegram - a tag needs either to be one of Bandcamp's
-own curated genres or have a fallback mapping to one.
+Check the tag's spelling against the Bandcamp website - an unrecognized tag
+just comes back with zero results, not an error.
 
 ## Auto-start
 

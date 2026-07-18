@@ -3,11 +3,11 @@
 Runs a second, receive-only Bot/Application (TelegramBot only ever sends)
 polling for commands in its own thread, restricted to the user's own
 TELEGRAM_CHAT_ID. Tags/blacklist changes apply on the next scheduled run
-with no restart (config is re-read live, see Config._get). Schedule and
-genre-fallback changes need a restart (APScheduler jobs and the parser's
-genre mapping are both fixed at process start), so those commands write the
-change and then self-SIGTERM to trigger the existing graceful-shutdown path
-and let systemd's Restart=always bring the process back up.
+with no restart (config is re-read live, see Config._get). Schedule changes
+need a restart (APScheduler jobs are fixed at process start), so those
+commands write the change and then self-SIGTERM to trigger the existing
+graceful-shutdown path and let systemd's Restart=always bring the process
+back up.
 """
 import asyncio
 import logging
@@ -40,9 +40,6 @@ HELP_TEXT = (
     "/schedule — текущее расписание\n"
     "/schedule_set <07:00,10:00,...> — задать времена (перезапуск)\n"
     "/schedule_jitter <минуты> — задать джиттер (перезапуск)\n\n"
-    "/genre_list — сопоставления тег → жанр\n"
-    "/genre_set <тег> <жанр> — задать сопоставление (перезапуск)\n"
-    "/genre_remove <тег> — убрать сопоставление (перезапуск)\n\n"
     "/status — статистика и статус\n"
 )
 
@@ -74,9 +71,6 @@ class AdminBot:
             ("schedule", self._cmd_schedule),
             ("schedule_set", self._cmd_schedule_set),
             ("schedule_jitter", self._cmd_schedule_jitter),
-            ("genre_list", self._cmd_genre_list),
-            ("genre_set", self._cmd_genre_set),
-            ("genre_remove", self._cmd_genre_remove),
             ("status", self._cmd_status),
         ):
             self._application.add_handler(CommandHandler(name, handler))
@@ -125,9 +119,6 @@ class AdminBot:
                 ("schedule", "Текущее расписание"),
                 ("schedule_set", "Задать времена запуска"),
                 ("schedule_jitter", "Задать джиттер"),
-                ("genre_list", "Сопоставления тег→жанр"),
-                ("genre_set", "Задать сопоставление"),
-                ("genre_remove", "Убрать сопоставление"),
                 ("status", "Статистика и статус"),
                 ("help", "Список команд"),
             ])
@@ -316,49 +307,6 @@ class AdminBot:
             data["schedule"] = schedule
             self._write_overrides(data)
         await self._request_restart(update, f"Джиттер обновлён: {minutes} мин.")
-
-    # -- genre fallback mapping (restart needed) -------------------------
-
-    async def _cmd_genre_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self._is_authorized(update):
-            return
-        mapping = config.genre_fallback
-        lines = [f"{tag} → {genre}" for tag, genre in sorted(mapping.items())]
-        await update.message.reply_text("Сопоставления тег → жанр:\n" + "\n".join(lines))
-
-    async def _cmd_genre_set(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self._is_authorized(update):
-            return
-        if len(context.args) < 2:
-            await update.message.reply_text("Использование: /genre_set <тег> <жанр>")
-            return
-        genre = context.args[-1].strip()
-        tag = " ".join(context.args[:-1]).strip()
-        with self._overrides_lock:
-            data = self._read_overrides()
-            # Patch dict (tag -> genre or None-tombstone), not the full
-            # merged mapping - config.genre_fallback layers this on top of
-            # BandcampParser.GENRE_FALLBACK at read time.
-            genre_map = dict(data.get("genre_fallback") or {})
-            genre_map[tag] = genre
-            data["genre_fallback"] = genre_map
-            self._write_overrides(data)
-        await self._request_restart(update, f"'{tag}' → '{genre}' сохранено.")
-
-    async def _cmd_genre_remove(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self._is_authorized(update):
-            return
-        if not context.args:
-            await update.message.reply_text("Использование: /genre_remove <тег>")
-            return
-        tag = " ".join(context.args).strip()
-        with self._overrides_lock:
-            data = self._read_overrides()
-            genre_map = dict(data.get("genre_fallback") or {})
-            genre_map[tag] = None  # tombstone
-            data["genre_fallback"] = genre_map
-            self._write_overrides(data)
-        await self._request_restart(update, f"'{tag}' убран из сопоставлений.")
 
     # -- status (read-only) ----------------------------------------------
 

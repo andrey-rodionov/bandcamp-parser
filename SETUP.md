@@ -113,9 +113,9 @@ tags:
   - "crust punk"
 ```
 
-Tags that aren't one of Bandcamp's own curated genres are automatically
-mapped to the closest one (see `GENRE_FALLBACK` in `src/parser.py`, or the
-`/genre_list` Telegram command once the bot is running).
+Any tag works here - a Bandcamp genre, an official subgenre, or an informal
+community tag - releases are matched against it directly regardless of what
+genre Bandcamp filed them under.
 
 ### Blacklist
 
@@ -130,9 +130,9 @@ blacklist_tags:
 
 ## Reconfiguring after launch
 
-Once the bot is running, you can add/remove tags and blacklist entries,
-change the schedule, and edit genre mappings directly from Telegram instead
-of editing files - send `/help` to the bot's chat for the full command list.
+Once the bot is running, you can add/remove tags and blacklist entries and
+change the schedule directly from Telegram instead of editing files - send
+`/help` to the bot's chat for the full command list.
 
 ## Verification
 

@@ -75,7 +75,6 @@ class BandcampBot:
             user_agent=config.parser.user_agent,
             request_delay=config.parser.request_delay,
             shutdown_event=self._shutdown_event,
-            genre_fallback=config.genre_fallback
         )
 
         # Telegram bot
@@ -85,8 +84,8 @@ class BandcampBot:
             max_description_length=config.telegram.max_description_length
         )
 
-        # Admin bot - Telegram commands for editing tags/blacklist/schedule/
-        # genre-fallback mappings without SSH access.
+        # Admin bot - Telegram commands for editing tags/blacklist/schedule
+        # without SSH access.
         self.admin_bot = AdminBot(self)
         
         # Scheduler
@@ -111,11 +110,9 @@ class BandcampBot:
         if self.db.exists(release.url):
             return False
 
-        # Refine the generic genre label (assigned via GENRE_FALLBACK) with
-        # the release's actual applied tags, fetched from its own page -
-        # confirms a specific subgenre tag (e.g. "hardcore-punk") is
-        # genuinely present rather than just inferred from the broader
-        # parent-genre feed it was fetched from.
+        # Fill in the release's full real tag list (fetched from its own
+        # page) - the discover API only tells us it matched the one tag we
+        # searched for, not everything the artist applied.
         real_tags = self.parser.fetch_release_tags(release.url)
         if real_tags:
             release.tags = real_tags

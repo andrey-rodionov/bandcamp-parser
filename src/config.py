@@ -154,26 +154,6 @@ class Config:
         return self._get("blacklist_tags", default=[])
 
     @property
-    def genre_fallback(self) -> Dict[str, str]:
-        """Get the informal-tag -> curated-genre fallback mapping, merging
-        BandcampParser's built-in defaults with any bot-written overrides.
-        An override value of None deletes that key from the result (lets
-        admin commands remove a mapping, not just add/replace one)."""
-        # Imported locally to avoid a module-load-order dependency between
-        # config.py and parser.py (the `config = Config()` singleton below
-        # is constructed at import time).
-        from src.parser import BandcampParser
-
-        mapping = dict(BandcampParser.GENRE_FALLBACK)
-        overrides = self._load_overrides().get("genre_fallback") or {}
-        for tag, genre in overrides.items():
-            if genre is None:
-                mapping.pop(tag, None)
-            else:
-                mapping[tag] = genre
-        return mapping
-
-    @property
     def parser(self) -> ParserConfig:
         """Get parser configuration."""
         return ParserConfig(

@@ -7,14 +7,14 @@ Telegram commands.
 ## Features
 
 - 🔍 **Release discovery** via Bandcamp's own internal discover API — no
-  browser automation, no headless Chrome
-- 🧭 **Genre fallback mapping** — tags that aren't one of Bandcamp's curated
-  genres (e.g. "hardcore punk", "d-beat") are automatically served from the
-  closest matching genre feed
+  browser automation, no headless Chrome. Tags are matched directly against
+  Bandcamp's real tag data, so a release is found regardless of its primary
+  genre (e.g. a release tagged "hardcore punk" but filed under "Rock" is
+  still caught)
 - 🚫 **Tag blacklist** — exclude unwanted genres
 - 📱 **Telegram notifications** with release info and link
-- 🛠️ **Telegram admin commands** — change tags, blacklist, schedule, and
-  genre mappings without touching the server
+- 🛠️ **Telegram admin commands** — change tags, blacklist, and schedule
+  without touching the server
 - ⏰ **Flexible scheduling** with jitter — configurable run times plus a
   random delay so runs aren't perfectly predictable
 - 🗄️ **SQLite database** for tracking sent releases, with both age-based and
@@ -132,14 +132,12 @@ tags:
   - "crust punk"
 ```
 
-Bandcamp's internal discover API only accepts its own curated top-level
-genres (e.g. `punk`, `metal`, `electronic`, ~15-20 total). Any tag that
-isn't one of those is looked up in a genre-fallback table
-(`GENRE_FALLBACK` in `src/parser.py`) and served from the closest matching
-genre feed instead — e.g. `"hardcore punk"` and `"d-beat"` both fall back to
-the `punk` feed, `"metalcore"` falls back to `metal`. You can review or
-change these mappings live via the `/genre_list`, `/genre_set`, and
-`/genre_remove` Telegram commands (see below) instead of editing code.
+Any tag works here - a Bandcamp top-level genre (`punk`, `metal`,
+`electronic`, ...), an official subgenre (`hardcore-punk`, `crust-punk`,
+...), or an informal community tag (`d-beat`, `raw-punk`, `uk82`, ...).
+Releases are matched against the tag directly, regardless of what genre
+Bandcamp filed them under, so a release tagged `"hardcore punk"` but filed
+under `"Rock"` is still found.
 
 ### Blacklist (`blacklist_tags`)
 
@@ -191,9 +189,6 @@ from any other chat are silently ignored.
 | `/schedule` | Show current schedule | — |
 | `/schedule_set 07:00,10:00,...` | Replace the run times | Yes — bot restarts itself |
 | `/schedule_jitter <minutes>` | Set the jitter window | Yes — bot restarts itself |
-| `/genre_list` | Show tag → genre fallback mappings | — |
-| `/genre_set <tag> <genre>` | Add/change a mapping | Yes — bot restarts itself |
-| `/genre_remove <tag>` | Remove a mapping | Yes — bot restarts itself |
 | `/status` | DB stats, disk usage, last successful run | — |
 
 Changes that need a restart are written to disk first, then the bot restarts
@@ -214,7 +209,7 @@ loses its comments.
 │   ├── __init__.py        # Module exports
 │   ├── config.py          # Configuration (dataclasses + overrides layer)
 │   ├── database.py        # SQLite operations + cleanup
-│   ├── parser.py          # Bandcamp discover-API client + genre fallback
+│   ├── parser.py          # Bandcamp discover-API client (tag-based search)
 │   ├── telegram_bot.py    # Telegram notification sending
 │   ├── admin_bot.py       # Telegram admin command handling
 │   ├── scheduler.py       # Scheduler (APScheduler)
@@ -230,16 +225,17 @@ loses its comments.
 
 ## How It Works
 
-1. **Fetch releases** — for each tag, the bot resolves it to a Bandcamp
-   curated genre (directly, or via the genre-fallback table) and calls
-   Bandcamp's internal discover API for that genre's newest releases
+1. **Fetch releases** — for each tag, the bot calls Bandcamp's internal
+   discover API filtered directly by that tag, across all genres
 2. **Combine pages** — the freshest page is always included, plus one
-   supplemental page that advances on each call, so tags sharing a genre
-   still get broad coverage without ever missing newly published releases
+   supplemental page that advances on each call, for broader coverage of a
+   tag's back catalog without ever missing newly published releases
 3. **Check DB** — skip releases already in the database
-4. **Send to Telegram** — formatted message (artist, title, genre, release
+4. **Fetch real tags** — the new release's own page is fetched to pull its
+   full, real tag list for storage and the Telegram message
+5. **Send to Telegram** — formatted message (artist, title, tags, release
    date, location, link, preorder status)
-5. **Save to DB** — before attempting to send, so a failed send is retried
+6. **Save to DB** — before attempting to send, so a failed send is retried
    later instead of being lost
 
 ## Logging
@@ -263,11 +259,9 @@ Format:
 
 ### A tag returns no releases
 
-- Check the tag has a genre-fallback mapping (`/genre_list`), or is itself
-  one of Bandcamp's curated genres - a tag with neither will log a warning
-  and return nothing
-- Check tag spelling against the Bandcamp website
-- Check logs for errors
+- Check tag spelling against the Bandcamp website - an unrecognized tag
+  just comes back with zero results, not an error
+- Check logs for errors (a failed request logs a warning)
 
 ### Tasks not running on schedule
 
