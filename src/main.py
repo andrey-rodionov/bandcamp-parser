@@ -144,6 +144,21 @@ class BandcampBot:
             self.db.mark_sent(release.url)
             return True
     
+    def _tags_hit_blacklist(self, tags) -> bool:
+        """Check whether any of a release's real tags is itself blacklisted.
+
+        The blacklist pre-pass only searches Bandcamp directly for each
+        blacklist tag, which can miss a release that a high-volume feed
+        buries deep - e.g. a release found under a main tag might also
+        carry a blacklisted tag without ever surfacing in that tag's own
+        search. This catches it using the release's real tag list (fetched
+        via fetch_release_tags) instead of relying solely on the pre-pass."""
+        blacklist_slugs = {t.strip().lower().replace(' ', '-') for t in config.blacklist_tags}
+        if not blacklist_slugs:
+            return False
+        release_slugs = {t.strip().lower().replace(' ', '-') for t in tags}
+        return bool(blacklist_slugs & release_slugs)
+
     async def _process_blacklist(self) -> int:
         """Process blacklist tags. Returns count of blacklisted."""
         blacklist_tags = config.blacklist_tags
@@ -198,6 +213,20 @@ class BandcampBot:
                 if real_tags:
                     release.tags = real_tags
 
+                if self._tags_hit_blacklist(release.tags):
+                    added = self.db.add(
+                        release_url=release.url,
+                        title=release.title,
+                        artist=release.artist,
+                        tags=release.tags,
+                        cover_url=release.cover_url
+                    )
+                    if added:
+                        self.db.mark_sent(release.url)
+                        result.blacklisted += 1
+                        logger.info(f"Blacklisted (real tag match): {release.title}")
+                    continue
+
                 # Add to database first (even if sending fails)
                 added = self.db.add(
                     release_url=release.url,
@@ -206,10 +235,10 @@ class BandcampBot:
                     tags=release.tags,
                     cover_url=release.cover_url
                 )
-                
+
                 if not added:
                     continue
-                
+
                 # Send to Telegram
                 success = await self.telegram.send_release(release)
                 
@@ -283,10 +312,10 @@ class BandcampBot:
         try:
             # Process blacklist first
             blacklisted = await self._process_blacklist()
-            
+
             # Process main tags
             result = await self._process_main_tags()
-            result.blacklisted = blacklisted
+            result.blacklisted += blacklisted
             
             # Log summary
             logger.info(f"Sent {result.sent} new releases")

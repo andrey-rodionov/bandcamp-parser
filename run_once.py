@@ -76,6 +76,7 @@ async def run_once():
         logger.info("=" * 50)
         logger.info("Processing main tags...")
 
+        blacklist_slugs = {t.strip().lower().replace(' ', '-') for t in config.blacklist_tags}
         sent = 0
         failed = 0
 
@@ -85,6 +86,30 @@ async def run_once():
 
             for release in releases:
                 if db.exists(release.url):
+                    continue
+
+                # Fill in the release's full real tag list - the discover
+                # API only tells us it matched the one tag we searched for.
+                real_tags = parser.fetch_release_tags(release.url)
+                if real_tags:
+                    release.tags = real_tags
+
+                # A release found under a main tag can also carry a
+                # blacklisted tag that its own search never surfaced (e.g.
+                # buried deep in a high-volume feed) - catch it here using
+                # the real tag list instead of relying solely on the
+                # blacklist pre-pass above.
+                if blacklist_slugs & {t.strip().lower().replace(' ', '-') for t in release.tags}:
+                    if db.add(
+                        release_url=release.url,
+                        title=release.title,
+                        artist=release.artist,
+                        tags=release.tags,
+                        cover_url=release.cover_url
+                    ):
+                        db.mark_sent(release.url)
+                        blacklisted += 1
+                        logger.info(f"Blacklisted (real tag match): {release.title}")
                     continue
 
                 # Add to DB first (even if sending fails) so a failed send
@@ -111,7 +136,7 @@ async def run_once():
                     logger.warning(f"Failed to send: {release.title} (saved to DB for retry)")
 
         # Summary
-        logger.info(f"Sent {sent} new releases ({failed} failed, will retry)")
+        logger.info(f"Sent {sent} new releases ({failed} failed, will retry, {blacklisted} blacklisted)")
 
         if sent > 0:
             await telegram.send_message(f"✅ Found and sent {sent} new release(s)")
