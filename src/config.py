@@ -52,6 +52,7 @@ class Config:
     DEFAULT_TIMEZONE = "UTC"
     DEFAULT_JITTER_MINUTES = 0
     DEFAULT_TAGS = ["punk", "hardcore"]
+    DEFAULT_MAX_RELEASE_AGE_DAYS = 30
     DEFAULT_REQUEST_DELAY = 1.5
     DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     DEFAULT_MAX_DESC_LENGTH = 0
@@ -152,6 +153,12 @@ class Config:
     def blacklist_tags(self) -> List[str]:
         """Get list of blacklist tags."""
         return self._get("blacklist_tags", default=[])
+
+    @property
+    def max_release_age_days(self) -> int:
+        """Releases older than this are added to DB but not sent to
+        Telegram (0 = no limit)."""
+        return self._get("max_release_age_days", default=self.DEFAULT_MAX_RELEASE_AGE_DAYS)
 
     @property
     def parser(self) -> ParserConfig:

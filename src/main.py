@@ -47,6 +47,7 @@ class ParsingResult:
     blacklisted: int = 0
     sent: int = 0
     failed: int = 0
+    skipped_old: int = 0
 
 
 class BandcampBot:
@@ -207,6 +208,23 @@ class BandcampBot:
                 if self.db.exists(release.url):
                     continue
 
+                # Bandcamp's "new" feed isn't strictly chronological and
+                # can surface older catalog items - skip fetching real tags
+                # for those entirely and just record them without sending.
+                if release.is_older_than_days(config.max_release_age_days):
+                    added = self.db.add(
+                        release_url=release.url,
+                        title=release.title,
+                        artist=release.artist,
+                        tags=release.tags,
+                        cover_url=release.cover_url
+                    )
+                    if added:
+                        self.db.mark_sent(release.url)
+                        result.skipped_old += 1
+                        logger.debug(f"Skipped (older than {config.max_release_age_days}d): {release.title}")
+                    continue
+
                 # Refine the generic genre label with the release's actual
                 # applied tags - see _process_release for why.
                 real_tags = self.parser.fetch_release_tags(release.url)
@@ -318,7 +336,10 @@ class BandcampBot:
             result.blacklisted += blacklisted
             
             # Log summary
-            logger.info(f"Sent {result.sent} new releases")
+            logger.info(
+                f"Sent {result.sent} new releases "
+                f"({result.blacklisted} blacklisted, {result.skipped_old} too old)"
+            )
             
             # Send summary to Telegram
             if result.sent > 0:

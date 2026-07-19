@@ -54,7 +54,13 @@ blacklist_tags:
   - "happy hardcore"
   - "electronic"
   - "techno"
-  
+
+# Skip releases older than this many days (0 = no limit). Bandcamp's "new"
+# feed isn't strictly chronological and sometimes surfaces older catalog
+# items - this keeps those out of Telegram without disabling them from
+# being found at all (still added to DB, just not sent).
+max_release_age_days: 30
+
 # Parser settings
 parser:
   # Delay between requests (seconds)

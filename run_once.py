@@ -79,6 +79,7 @@ async def run_once():
         blacklist_slugs = {t.strip().lower().replace(' ', '-') for t in config.blacklist_tags}
         sent = 0
         failed = 0
+        skipped_old = 0
 
         for tag in config.tags:
             logger.info(f"Processing tag: {tag}")
@@ -86,6 +87,21 @@ async def run_once():
 
             for release in releases:
                 if db.exists(release.url):
+                    continue
+
+                # Bandcamp's "new" feed isn't strictly chronological and
+                # can surface older catalog items - skip fetching real tags
+                # for those entirely and just record them without sending.
+                if release.is_older_than_days(config.max_release_age_days):
+                    if db.add(
+                        release_url=release.url,
+                        title=release.title,
+                        artist=release.artist,
+                        tags=release.tags,
+                        cover_url=release.cover_url
+                    ):
+                        db.mark_sent(release.url)
+                        skipped_old += 1
                     continue
 
                 # Fill in the release's full real tag list - the discover
@@ -136,7 +152,10 @@ async def run_once():
                     logger.warning(f"Failed to send: {release.title} (saved to DB for retry)")
 
         # Summary
-        logger.info(f"Sent {sent} new releases ({failed} failed, will retry, {blacklisted} blacklisted)")
+        logger.info(
+            f"Sent {sent} new releases ({failed} failed, will retry, "
+            f"{blacklisted} blacklisted, {skipped_old} too old)"
+        )
 
         if sent > 0:
             await telegram.send_message(f"✅ Found and sent {sent} new release(s)")
