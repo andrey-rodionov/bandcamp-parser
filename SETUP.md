@@ -119,7 +119,10 @@ genre Bandcamp filed them under.
 
 ### Blacklist
 
-Releases from these tags are added to DB but **not sent**:
+Releases from these tags are added to DB but **not sent**. This also
+catches a release found under a main tag that genuinely carries a
+blacklisted tag among its real tags, even if that tag's own search never
+surfaced it:
 
 ```yaml
 blacklist_tags:
@@ -127,6 +130,16 @@ blacklist_tags:
   - "electronic"
   - "techno"
 ```
+
+### Release age filter
+
+```yaml
+max_release_age_days: 30
+```
+
+Bandcamp's "new" feed occasionally surfaces older catalog items - a
+release older than this is recorded in the DB but not sent to Telegram.
+Set to `0` to disable.
 
 ## Reconfiguring after launch
 

@@ -11,7 +11,10 @@ Telegram commands.
   Bandcamp's real tag data, so a release is found regardless of its primary
   genre (e.g. a release tagged "hardcore punk" but filed under "Rock" is
   still caught)
-- 🚫 **Tag blacklist** — exclude unwanted genres
+- 🚫 **Tag blacklist** — exclude unwanted genres, checked against a release's
+  real tags so it's caught even if found under an unrelated main tag
+- 📅 **Release age filter** — skips releases older than a configurable
+  number of days instead of sending them as if they just dropped
 - 📱 **Telegram notifications** with release info and link
 - 🛠️ **Telegram admin commands** — change tags, blacklist, and schedule
   without touching the server
@@ -93,6 +96,9 @@ blacklist_tags:
   - "pop"
   - "electronic"
 
+# Skip releases older than this many days (0 = no limit)
+max_release_age_days: 30
+
 # Parser settings
 parser:
   request_delay: 1.5         # Delay between requests (sec)
@@ -155,6 +161,23 @@ blacklist_tags:
 2. Found releases are added to DB (but not sent)
 3. Then main tags are parsed
 4. Releases already found in blacklist are skipped
+5. A release newly found under a main tag is also checked against its own
+   real tag list (see "Fetch real tags" below) - this catches a release
+   that genuinely carries a blacklisted tag even if that tag's own search
+   never surfaced it (e.g. buried deep in a high-volume feed)
+
+### Release age filter (`max_release_age_days`)
+
+```yaml
+max_release_age_days: 30
+```
+
+Bandcamp's "new" feed isn't strictly chronological and occasionally
+surfaces older catalog items alongside genuinely new ones. A release older
+than this many days is still added to the database (so it isn't re-checked
+every run) but is not sent to Telegram. Set to `0` to disable - a release's
+own future-dated preorder date is never affected by this, only releases
+older than the cutoff are held back.
 
 ### Parser (`parser`)
 
@@ -231,11 +254,15 @@ loses its comments.
    supplemental page that advances on each call, for broader coverage of a
    tag's back catalog without ever missing newly published releases
 3. **Check DB** — skip releases already in the database
-4. **Fetch real tags** — the new release's own page is fetched to pull its
+4. **Check release age** — a release older than `max_release_age_days` is
+   recorded in the DB and skipped here, without fetching its real tags
+5. **Fetch real tags** — the new release's own page is fetched to pull its
    full, real tag list for storage and the Telegram message
-5. **Send to Telegram** — formatted message (artist, title, tags, release
+6. **Check blacklist** — skip (but still record) a release whose real tags
+   match a blacklisted tag
+7. **Send to Telegram** — formatted message (artist, title, tags, release
    date, location, link, preorder status)
-6. **Save to DB** — before attempting to send, so a failed send is retried
+8. **Save to DB** — before attempting to send, so a failed send is retried
    later instead of being lost
 
 ## Logging

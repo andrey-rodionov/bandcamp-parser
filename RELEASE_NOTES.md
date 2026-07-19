@@ -1,5 +1,52 @@
 # Release Notes
 
+## Version 2.0.3 - Blacklist Real-Tag Matching and a Release Age Filter
+
+### Summary
+Two gaps left over from the move to direct tag-based search (2.0.2): a
+release could still slip past the blacklist if the blacklist tag's own
+search never happened to surface it, and Bandcamp's "new" feed occasionally
+mixes in older catalog items that would otherwise go out looking like a
+brand new release.
+
+### Changes
+
+#### New Features
+- Blacklist check now also runs against each release's real tag list (the
+  one already fetched to refine the generic tag it was found under) - a
+  release found via a main tag but genuinely carrying a blacklisted tag is
+  now caught even if the blacklist tag's own search buries it too deep to
+  surface on its own
+- New `max_release_age_days` config option (default `30`): a release older
+  than this is still recorded in the database (so it isn't re-checked every
+  run) but is no longer sent to Telegram. `0` disables it. Checked before
+  the real-tag fetch, so older releases skip that extra request entirely.
+  A release's own future-dated preorder date is unaffected either way.
+
+### Technical Details
+- Verified against a live example: a release surfaced under the "punk" tag
+  turned out to carry "electronic" (a blacklisted tag) among its real tags
+  - previously would have been sent, now correctly held back
+- `run_once.py` brought in line with the long-running service: it now also
+  fetches real tags and applies both the blacklist and age checks (it
+  previously skipped tag enrichment entirely)
+
+### Database Impact
+- No schema changes
+
+### Migration Notes
+- No action needed - `max_release_age_days` defaults to `30` if not set in
+  `config.yaml`
+
+### Testing Recommendations
+1. Confirm a release with a blacklisted tag buried under a main-tag search
+   is recorded but not sent
+2. Confirm a release older than the configured threshold is recorded but
+   not sent, and a recent one is sent normally
+3. Confirm `run_once.py` still sends new releases correctly after the change
+
+---
+
 ## Version 2.0.2 - Direct Tag-Based Search, Removing Genre Guessing
 
 ### Summary

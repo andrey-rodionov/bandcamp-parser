@@ -68,6 +68,8 @@ tags:
 blacklist_tags:
   - "electronic"
 
+max_release_age_days: 30
+
 parser:
   request_delay: 1.5
 ```
