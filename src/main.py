@@ -71,6 +71,24 @@ class BandcampBot:
         # via the admin bot's /status command.
         self._last_run_at: Optional[datetime] = None
 
+        # A single event loop for the whole process lifetime, running on
+        # its own thread. The scheduled parsing task, the 20-minute retry
+        # loop, and the startup message each used to call asyncio.run() on
+        # their own, which spins up a brand-new loop every time - but the
+        # Telegram bot below (and its httpx client) is created once and
+        # reused across all of them. httpx binds its internal connection
+        # pool to whichever loop first touches it; reused from a different,
+        # later loop, requests either fail fast with "Event loop is closed"
+        # or - worse - hang until the outer 30s timeout, which is what
+        # caused every send to silently time out for hours in production.
+        # Routing all async work through this one persistent loop avoids
+        # the cross-loop reuse entirely.
+        self._async_loop = asyncio.new_event_loop()
+        self._async_loop_thread = threading.Thread(
+            target=self._run_async_loop, daemon=True, name="AsyncLoop"
+        )
+        self._async_loop_thread.start()
+
         # Parser
         self.parser = BandcampParser(
             user_agent=config.parser.user_agent,
@@ -95,12 +113,31 @@ class BandcampBot:
             timezone=config.schedule.timezone,
             jitter_seconds=config.schedule.jitter_minutes * 60
         )
-        self.scheduler.set_task(self.run_parsing)
-        
+        self.scheduler.set_task(self._run_parsing_sync)
+
         # Retry task control
         self._retry_running = False
         self._retry_thread: Optional[threading.Thread] = None
-    
+
+    def _run_async_loop(self) -> None:
+        """Entry point for the dedicated async-loop thread - see __init__
+        for why this loop must live for the whole process, not be recreated
+        per call."""
+        asyncio.set_event_loop(self._async_loop)
+        self._async_loop.run_forever()
+
+    def _run_coro(self, coro):
+        """Run a coroutine on the persistent async loop from any thread,
+        blocking the caller until it completes - the synchronous-looking
+        replacement for asyncio.run() that all Telegram-touching entry
+        points (scheduled task, retry loop, startup message) go through."""
+        return asyncio.run_coroutine_threadsafe(coro, self._async_loop).result()
+
+    def _run_parsing_sync(self) -> None:
+        """Sync wrapper so TaskScheduler (a plain callback-based scheduler)
+        can invoke the async run_parsing() on the shared loop."""
+        self._run_coro(self.run_parsing())
+
     async def _process_release(
         self, 
         release: Release, 
@@ -406,7 +443,7 @@ class BandcampBot:
         while self._retry_running:
             try:
                 # Run retry task
-                asyncio.run(self._retry_failed_releases())
+                self._run_coro(self._retry_failed_releases())
             except Exception as e:
                 logger.error(f"Error in retry task: {e}", exc_info=True)
             
@@ -469,7 +506,13 @@ class BandcampBot:
                 logger.info("HTTP session closed")
             except Exception:
                 pass
-    
+
+        # Stop the persistent async loop last, after everything that might
+        # still submit work to it (retry task, admin bot) has stopped.
+        if self._async_loop.is_running():
+            self._async_loop.call_soon_threadsafe(self._async_loop.stop)
+        self._async_loop_thread.join(timeout=5)
+
     def run(self) -> None:
         """Run the application."""
         logger.info("Starting Bandcamp Parser Bot...")
@@ -489,7 +532,7 @@ class BandcampBot:
 
         # Send startup message
         try:
-            asyncio.run(self._send_startup_message())
+            self._run_coro(self._send_startup_message())
         except Exception as e:
             logger.warning(f"Could not send startup message: {e}")
         

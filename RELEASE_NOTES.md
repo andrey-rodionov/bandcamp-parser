@@ -1,5 +1,65 @@
 # Release Notes
 
+## Version 2.0.4 - One Persistent Event Loop Instead of One Per Call
+
+### Summary
+Found in production: every Telegram send silently timed out for about 11
+hours straight (12:00-22:00), with runs backing up on top of each other and
+nothing actually delivered, before a routine restart cleared it. Root cause
+was an event-loop lifecycle bug, not a Bandcamp or throttling issue.
+
+### Changes
+
+#### Bug Fixes
+- The scheduled parsing task, the 20-minute retry loop, and the startup
+  message each called `asyncio.run(...)` independently - which creates and
+  tears down a brand-new event loop every single call. The Telegram bot
+  (and its httpx client) is created once at startup and was being reused
+  across all of these short-lived loops. httpx binds its connection pool's
+  internal locks to whichever loop first touches it; used later from a
+  different loop, requests either fail fast ("Event loop is closed" - the
+  usually-harmless warning seen occasionally before) or hang until the
+  outer 30-second timeout - which is what happened for hours at a time.
+- All three entry points now run on one event loop that lives for the
+  whole process, on its own dedicated thread, submitted to via
+  `asyncio.run_coroutine_threadsafe`. The Telegram client is now only ever
+  touched from that same loop.
+- Discover API failures now log at `warning`/`error` instead of `debug`, so
+  a real failure is visible in the log instead of looking identical to a
+  tag genuinely having nothing new.
+- Discover API page fetches now retry with backoff (up to 3 attempts)
+  instead of giving up on the first failure.
+- Every outbound request (discover API and per-release tag enrichment) now
+  goes through a shared throttle instead of firing back to back -
+  `request_delay` was previously read from config but never actually used
+  anywhere. A burst of many enrichment requests in a row (one per newly
+  found release) had been observed to trip Bandcamp's own rate limiting
+  right before the main tags were fetched, failing all of them for that run.
+
+### Technical Details
+- `src/scheduler.py`: `TaskFunction` is now a plain sync callable instead
+  of a coroutine function: the scheduler no longer owns any event loop
+  itself, it just calls back into `BandcampBot`, which owns the one
+  persistent loop
+- `src/main.py`: new `_run_async_loop`/`_run_coro` on `BandcampBot`; the
+  loop is started in `__init__` and stopped last in `_cleanup()`
+
+### Database Impact
+- None
+
+### Migration Notes
+- No action needed
+
+### Testing Recommendations
+1. Let the service run across several scheduled times and confirm sends
+   keep succeeding without a restart in between
+2. Confirm the 20-minute retry loop still picks up and sends previously
+   failed releases
+3. Confirm the service still starts and stops cleanly (no hang past
+   `TimeoutStopSec`)
+
+---
+
 ## Version 2.0.3 - Blacklist Real-Tag Matching and a Release Age Filter
 
 ### Summary

@@ -1,18 +1,20 @@
 """Scheduler module for running tasks at specified times."""
 import logging
-import asyncio
 import time
 import threading
 from datetime import datetime
-from typing import List, Callable, Awaitable, Optional
+from typing import List, Callable, Optional
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
 logger = logging.getLogger(__name__)
 
-# Type alias for async task function
-TaskFunction = Callable[[], Awaitable[None]]
+# Type alias for the task callback. Plain sync callable - the caller (see
+# BandcampBot._run_parsing_sync) is responsible for running any async work
+# on its own persistent event loop rather than handing us a coroutine to
+# wrap in asyncio.run(), which would spin up a fresh loop per call.
+TaskFunction = Callable[[], None]
 
 
 class TaskScheduler:
@@ -106,7 +108,7 @@ class TaskScheduler:
             return
         
         try:
-            asyncio.run(self._task_function())
+            self._task_function()
             logger.info("=" * 60)
             logger.info(f"Task completed at {datetime.now(self._timezone)}")
             logger.info("=" * 60)
@@ -167,7 +169,7 @@ class TaskScheduler:
             self._scheduler.shutdown(wait=False)
             logger.info("Scheduler stopped")
     
-    async def run_now(self) -> None:
+    def run_now(self) -> None:
         """Run the task immediately (for testing)."""
         if self._task_function:
-            await self._task_function()
+            self._task_function()
