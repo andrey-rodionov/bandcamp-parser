@@ -2,6 +2,7 @@
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Generator, List, Optional
@@ -53,6 +54,15 @@ class BandcampParser:
     # but which is tagged "hardcore-punk" is still found, instead of being
     # invisible unless we happened to also scan the "rock" feed.
     DISCOVER_API_URL = "https://bandcamp.com/api/discover/1/discover_web"
+
+    # Retries for a single discover API page fetch before giving up on a
+    # tag for this run. Processing many newly-blacklisted releases in a row
+    # (one release-page GET each, see fetch_release_tags) has been observed
+    # to trip Bandcamp's rate limiting right before the main tags are
+    # fetched, failing every one of them in the same run - a short backoff
+    # and retry rides out that kind of transient block instead of losing
+    # the whole run's results for every tag.
+    MAX_RETRIES = 3
 
     def __init__(
         self,
@@ -115,37 +125,64 @@ class BandcampParser:
             is_preorder=bool(is_preorder) if is_preorder is not None else None
         )
 
+    def _throttle(self) -> None:
+        """Pace outbound requests so we don't hit Bandcamp with a burst of
+        dozens of requests back to back - a likely trigger for the rate
+        limiting seen after enriching many newly-found releases at once."""
+        if self.request_delay > 0:
+            time.sleep(self.request_delay)
+
     def _fetch_discover_tag_page(self, tag_slug: str, cursor: str):
         """Fetch a single page of results genuinely filtered by tag_slug
         (any Bandcamp tag - curated genre, official subgenre, or informal
-        community tag all work the same way here). Returns (items, next_cursor,
-        total_count), or None on a request/response error."""
-        try:
-            response = self.session.post(
-                self.DISCOVER_API_URL,
-                json={
-                    'category_id': 0,  # 0 = search across all genres
-                    'tag_norm_names': [tag_slug],
-                    'geoname_id': 0,
-                    'slice': 'new',
-                    'time_facet_id': None,
-                    'cursor': cursor,
-                    'size': 48,
-                    'include_result_types': ['a'],
-                    'followed_bands': False,
-                },
-                timeout=15
-            )
-            response.raise_for_status()
-            data = response.json()
-        except Exception as e:
-            logger.debug(f"Discover API request failed for tag '{tag_slug}' (cursor {cursor}): {e}")
-            return None
+        community tag all work the same way here). Retries on failure with
+        an increasing backoff. Returns (items, next_cursor, total_count),
+        or None if every attempt fails."""
+        payload = {
+            'category_id': 0,  # 0 = search across all genres
+            'tag_norm_names': [tag_slug],
+            'geoname_id': 0,
+            'slice': 'new',
+            'time_facet_id': None,
+            'cursor': cursor,
+            'size': 48,
+            'include_result_types': ['a'],
+            'followed_bands': False,
+        }
 
-        if 'results' not in data:
-            logger.debug(f"Discover API returned no results field for tag '{tag_slug}': {data}")
-            return None
-        return data['results'], data.get('cursor'), data.get('result_count') or 0
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            if attempt == 1:
+                self._throttle()
+            else:
+                backoff = self.request_delay * (2 ** (attempt - 1))
+                logger.info(
+                    f"Retrying discover API for tag '{tag_slug}' in {backoff:.1f}s "
+                    f"(attempt {attempt}/{self.MAX_RETRIES})"
+                )
+                time.sleep(backoff)
+
+            try:
+                response = self.session.post(self.DISCOVER_API_URL, json=payload, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+            except Exception as e:
+                logger.warning(
+                    f"Discover API request failed for tag '{tag_slug}' "
+                    f"(cursor {cursor}, attempt {attempt}/{self.MAX_RETRIES}): {e}"
+                )
+                continue
+
+            if 'results' not in data:
+                logger.warning(
+                    f"Discover API returned no results field for tag '{tag_slug}' "
+                    f"(attempt {attempt}/{self.MAX_RETRIES}): {data}"
+                )
+                continue
+
+            return data['results'], data.get('cursor'), data.get('result_count') or 0
+
+        logger.error(f"Discover API request for tag '{tag_slug}' failed after {self.MAX_RETRIES} attempts")
+        return None
 
     def _fetch_via_discover_api(self, tag: str) -> Optional[List[Release]]:
         """Fetch releases actually tagged with `tag` via Bandcamp's discover_web
@@ -198,11 +235,12 @@ class BandcampParser:
         that a release matched the one tag it was searched for - this fills
         in the rest of the release's real tags, for storage and for a fuller
         Telegram message."""
+        self._throttle()
         try:
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
         except Exception as e:
-            logger.debug(f"Could not fetch tags for {url}: {e}")
+            logger.warning(f"Could not fetch tags for {url}: {e}")
             return []
 
         return self._RELEASE_TAG_RE.findall(response.text)
