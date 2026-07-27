@@ -1,0 +1,9 @@
+services:
+  bandcamp-bot:
+    build: .
+    container_name: bandcamp-bot
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: python run.py

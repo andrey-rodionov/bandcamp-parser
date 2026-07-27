@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+*.db
+*.log
+*.log.*
+.env
+config.overrides.yaml
+SERVER_CHEATSHEET.txt
+.claude
