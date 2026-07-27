@@ -32,64 +32,47 @@ Disk: 5 GB SSD
 OS: Ubuntu 22.04 LTS
 ```
 
-## Installation on Ubuntu/Debian
+## Installation on Ubuntu/Debian (Docker)
+
+Runs in a container instead of a bare venv, so it can share a server with
+other apps without their Python dependencies conflicting.
 
 ```bash
-# Update
-sudo apt-get update && sudo apt-get upgrade -y
-
-# Dependencies
-sudo apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-venv
+# Docker Engine + Compose plugin
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
 
 # Project
 cd /opt
 git clone https://github.com/andrey-rodionov/bandcamp-parser.git bandcamp-bot
 cd bandcamp-bot
 
-# Virtual environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
 # Configuration
 cp .env.example .env
 nano .env
 nano config.yaml
+
+# Build and start
+docker compose build
+docker compose up -d
 ```
 
-## systemd
-
-A ready-to-use unit file is included at `bandcamp-bot.service` in the
-repository - adjust `WorkingDirectory`/paths as needed and copy it to
-`/etc/systemd/system/bandcamp-bot.service`:
-
-```ini
-[Unit]
-Description=Bandcamp Parser Bot
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/opt/bandcamp-bot
-Environment=PATH=/opt/bandcamp-bot/venv/bin
-ExecStart=/opt/bandcamp-bot/venv/bin/python run.py
-Restart=always
-RestartSec=10
-TimeoutStopSec=180
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable bandcamp-bot
-sudo systemctl start bandcamp-bot
-```
+`docker-compose.yml` bind-mounts the project directory into the container,
+so `config.yaml`, `.env`, the SQLite database, and the logs all live on the
+host at the same paths as before - only `requirements.txt`'s dependencies
+are baked into the image. A code update is a `git pull` (or re-upload) plus
+`docker compose up -d --build`; editing `config.yaml`/`.env` just needs
+`docker compose restart`. `restart: unless-stopped` in the compose file
+keeps it running across reboots the same way `systemd`'s `Restart=always`
+did previously.
 
 ## ⚠️ First Run on Server
 
@@ -107,13 +90,13 @@ sudo systemctl start bandcamp-bot
 
 ```bash
 # Status
-sudo systemctl status bandcamp-bot
+docker compose ps
 
 # Logs
-sudo journalctl -u bandcamp-bot -f
+docker compose logs -f
 
 # Resources
-htop
+docker stats bandcamp-bot
 
 # Database
 sqlite3 /opt/bandcamp-bot/bandcamp_releases.db "SELECT COUNT(*) FROM releases;"

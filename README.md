@@ -116,6 +116,12 @@ python run.py
 python run_once.py
 ```
 
+**Or with Docker** (see [SERVER_REQUIREMENTS.md](SERVER_REQUIREMENTS.md) for
+full server setup):
+```bash
+docker compose up -d --build
+```
+
 ## Configuration
 
 ### Schedule (`schedule`)
@@ -241,6 +247,8 @@ loses its comments.
 ├── config.overrides.yaml   # Bot-writable overrides (created automatically, gitignored)
 ├── .env                    # Secrets (tokens) - copy from .env.example
 ├── requirements.txt        # Python dependencies
+├── Dockerfile              # Container image (installs requirements.txt)
+├── docker-compose.yml      # Bind-mounts the project dir, runs `python run.py`
 ├── run.py                  # Run with schedule
 ├── run_once.py             # One-time run
 └── bandcamp_releases.db    # Database (created automatically)

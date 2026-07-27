@@ -1,5 +1,47 @@
 # Release Notes
 
+## Version 2.1.0 - Docker Deployment
+
+### Summary
+Moved the server deployment from a bare venv + systemd service to a Docker
+container, so the same server can run another app later without their
+Python dependencies conflicting.
+
+### Changes
+
+#### New Features
+- `Dockerfile`: a `python:3.11-slim` image with only `requirements.txt`
+  installed into it
+- `docker-compose.yml`: bind-mounts the project directory into the
+  container at `/app`, so `config.yaml`, `.env`, `config.overrides.yaml`,
+  the SQLite database, and the rotated logs all stay on the host at the
+  same paths as before - only the Python dependencies live inside the
+  image. `restart: unless-stopped` replaces systemd's `Restart=always`.
+
+### Technical Details
+- The old systemd service (`bandcamp-bot.service`) is stopped and disabled
+  on the server, not removed - kept as a rollback path
+- A code deploy is now `docker compose up -d --build`; a config-only change
+  is `docker compose restart` - no image rebuild needed for either
+
+### Database Impact
+- None - same database file, same path, just bind-mounted instead of
+  accessed directly
+
+### Migration Notes
+- Requires Docker Engine + the Compose plugin on the server (see
+  SERVER_REQUIREMENTS.md for the install commands)
+- `.env` and `config.yaml` don't need to move or change - the container
+  reads them from the same directory they were already in
+
+### Testing Recommendations
+1. Confirm the startup message arrives after `docker compose up -d`
+2. Confirm a scheduled run still sends releases and writes to the same
+   database file the host had before
+3. Confirm the container comes back up on its own after a host reboot
+
+---
+
 ## Version 2.0.4 - One Persistent Event Loop Instead of One Per Call
 
 ### Summary
