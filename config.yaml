@@ -1,9 +1,17 @@
 # Configuration file for Bandcamp Parser Bot
 
 # Schedule configuration (24-hour format)
-# Every hour from 08:00 to 00:00 UTC
+# Every hour from 00:00 to 16:00 UTC - paused 17:00-23:00 UTC
 schedule:
   times:
+    - "00:00"
+    - "01:00"
+    - "02:00"
+    - "03:00"
+    - "04:00"
+    - "05:00"
+    - "06:00"
+    - "07:00"
     - "08:00"
     - "09:00"
     - "10:00"
@@ -13,14 +21,6 @@ schedule:
     - "14:00"
     - "15:00"
     - "16:00"
-    - "17:00"
-    - "18:00"
-    - "19:00"
-    - "20:00"
-    - "21:00"
-    - "22:00"
-    - "23:00"
-    - "00:00"
   timezone: "UTC"
   # Random delay (0..N minutes) added after each scheduled time, so runs
   # don't fire at a perfectly predictable :00 mark every time.

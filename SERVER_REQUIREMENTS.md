@@ -3,7 +3,7 @@
 ## Current Configuration
 
 - **Tags:** 17 main + 3 blacklist
-- **Schedule:** every hour from 08:00 to 00:00 UTC (17 runs/day)
+- **Schedule:** every hour from 00:00 to 16:00 UTC, paused 17:00-23:00 UTC (17 runs/day)
 
 ## Minimum Requirements
 
